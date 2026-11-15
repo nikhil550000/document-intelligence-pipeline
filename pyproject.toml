@@ -19,6 +19,7 @@ python-preference = "only-system"
 [dependency-groups]
 dev = [
     "mypy>=2.4.1",
+    "pytest>=9.2.0",
     "ruff>=0.17.5",
 ]
 
@@ -35,3 +36,6 @@ convention = "google"
 strict = true
 python_version = "3.13"
 files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
