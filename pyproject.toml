@@ -1,0 +1,17 @@
+[project]
+name = "docintel"
+version = "0.1.0"
+description = "Extracts validated, structured records from English commercial contracts."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.13,<3.14"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv]
+# The Python that uv downloads is blocked on some machines, so use an installed one.
+python-preference = "only-system"
