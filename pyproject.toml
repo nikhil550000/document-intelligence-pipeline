@@ -15,3 +15,17 @@ build-backend = "uv_build"
 [tool.uv]
 # The Python that uv downloads is blocked on some machines, so use an installed one.
 python-preference = "only-system"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.5",
+]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
