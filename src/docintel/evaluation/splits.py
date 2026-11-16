@@ -67,7 +67,6 @@ def split_contracts(
         counts_and_names.append((len(positives), field_name))
     counts_and_names.sort()
 
-    # Kept in the order the contracts are added, because `smoke` is its start.
     dev: list[str] = []
     for _, field_name in counts_and_names:
         positives = positives_by_field[field_name]
@@ -85,9 +84,16 @@ def split_contracts(
         if contract not in dev:
             dev.append(contract)
 
-    smoke = sorted(dev[:smoke_size])
+    # A seeded random sample of dev, not only the contracts added for rare fields.
+    smoke: list[str] = []
+    for contract in shuffled:
+        if len(smoke) >= smoke_size:
+            break
+        if contract in dev:
+            smoke.append(contract)
+
     test = sorted(set(contracts).difference(dev))
-    return Splits(dev=sorted(dev), test=test, smoke=smoke)
+    return Splits(dev=sorted(dev), test=test, smoke=sorted(smoke))
 
 
 def count_positives(
