@@ -13,7 +13,7 @@ A pipeline that turns contract PDFs into validated, structured JSON records. It 
 ### Set up
 
 ```
-git clone https://github.com/<your-account>/document-intelligence-pipeline.git
+git clone https://github.com/nikhil550000/document-intelligence-pipeline.git
 cd document-intelligence-pipeline
 uv sync
 ```
