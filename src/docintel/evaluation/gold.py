@@ -19,15 +19,31 @@ class SkipRule(Enum):
 
 @dataclass(frozen=True)
 class AcceptedValues:
-    """The values that count as right.
-
-    For parties each value is one name, and each name is scored on its own. For
-    every other field the model is right when it gives any one of the values.
-    """
+    """The values that count as right. The model is right when it gives any one."""
 
     # Text is kept as CUAD wrote it, so an error report shows "Corio Inc." and
     # not the form used for comparing.
     values: tuple[date | Perpetual | Duration | str | bool, ...]
+
+    def __post_init__(self) -> None:
+        """Refuses an empty list, which would mark every model answer wrong."""
+        # An answer with nothing usable left is a skip, so an empty list is a bug.
+        if not self.values:
+            raise ValueError("no accepted values: the answer should be a skip")
+
+
+@dataclass(frozen=True)
+class PartyNames:
+    """The parties CUAD names. Each name is scored on its own."""
+
+    # Kept as CUAD wrote them, for the same reason as accepted values.
+    names: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Refuses an empty list, for the same reason as accepted values."""
+        # A parties answer with no name left is a skip.
+        if not self.names:
+            raise ValueError("no party names: the answer should be a skip")
 
 
 @dataclass(frozen=True)
@@ -42,4 +58,4 @@ class Skipped:
     rule: SkipRule
 
 
-type GoldAnswer = AcceptedValues | NoAnswer | Skipped
+type GoldAnswer = AcceptedValues | PartyNames | NoAnswer | Skipped

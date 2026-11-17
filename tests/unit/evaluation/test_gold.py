@@ -2,8 +2,16 @@
 
 from datetime import date
 
+import pytest
+
 from docintel.domain.values import Perpetual
-from docintel.evaluation.gold import AcceptedValues, NoAnswer, Skipped, SkipRule
+from docintel.evaluation.gold import (
+    AcceptedValues,
+    NoAnswer,
+    PartyNames,
+    Skipped,
+    SkipRule,
+)
 
 
 def test_there_are_five_skip_rules_with_these_names() -> None:
@@ -23,6 +31,18 @@ def test_accepted_values_with_the_same_values_are_equal() -> None:
     first = AcceptedValues((date(2019, 9, 5), Perpetual.PERPETUAL))
     second = AcceptedValues((date(2019, 9, 5), Perpetual.PERPETUAL))
     assert first == second
+
+
+def test_accepted_values_cannot_be_empty() -> None:
+    """An empty list would mark every model answer wrong without any error."""
+    with pytest.raises(ValueError):
+        AcceptedValues(())
+
+
+def test_party_names_cannot_be_empty() -> None:
+    """A parties answer with no name left is a skip, not an empty list."""
+    with pytest.raises(ValueError):
+        PartyNames(())
 
 
 def test_skips_are_equal_only_under_the_same_rule() -> None:
