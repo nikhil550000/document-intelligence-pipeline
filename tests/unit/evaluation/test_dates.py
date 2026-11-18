@@ -94,10 +94,11 @@ def test_real_file_has_the_published_shapes() -> None:
     """Every answer of the three fields reads, with the shapes found by hand."""
     answers = load_cuad_answers(MASTER_CLAUSES_PATH)
 
-    # Field: (one full date, perpetual only, two values, redacted only).
+    # Field: (one date, perpetual only, two values, redacted only), counted on
+    # what the reader returns. `07/31/2000; 07/[]/2000` has one readable date.
     expected = {
-        "agreement_date": (416, 0, 1, 48),
-        "effective_date": (323, 0, 2, 34),
+        "agreement_date": (417, 0, 0, 48),
+        "effective_date": (324, 0, 1, 34),
         "expiration_date": (241, 66, 1, 21),
     }
     for field_name, expected_counts in expected.items():
@@ -112,7 +113,7 @@ def test_real_file_has_the_published_shapes() -> None:
             gold = read_date_answer(answer, field_name)
             if isinstance(gold, Skipped):
                 redacted_only += 1
-            elif ";" in answer:
+            elif len(gold.values) == 2:
                 two_values += 1
             elif gold.values == (Perpetual.PERPETUAL,):
                 perpetual_only += 1
