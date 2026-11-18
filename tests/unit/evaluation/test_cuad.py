@@ -85,7 +85,7 @@ def test_passage_and_answer_are_returned_unchanged(tmp_path: Path) -> None:
     assert len(first) == 41
 
 
-# CI does not have the dataset, so this test only runs where it was downloaded.
+# Skipped without the dataset; one CI job downloads it and fails on any skip.
 @pytest.mark.skipif(
     not MASTER_CLAUSES_PATH.exists(),
     reason="CUAD is not downloaded; run `docintel data download`",

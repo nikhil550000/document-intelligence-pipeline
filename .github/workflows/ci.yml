@@ -24,3 +24,31 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run mypy
       - run: uv run pytest
+
+  real-file-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - run: uv sync --locked
+
+      # The key holds the archive's MD5, so a new dataset version gets a new cache.
+      - uses: actions/cache@v4
+        with:
+          path: data/CUAD_v1.zip
+          key: cuad-c38f490a984420b8a62600db401fafd5
+
+      # Checks the MD5 again, so a damaged cache is caught, not trusted.
+      - run: uv run docintel data download
+
+      # A skipped real-file test would pass without checking anything, so any skip fails.
+      - run: |
+          uv run pytest -rs | tee pytest.log
+          ! grep -q SKIPPED pytest.log
+        shell: bash
