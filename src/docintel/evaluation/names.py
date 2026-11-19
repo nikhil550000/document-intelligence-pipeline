@@ -21,10 +21,11 @@ def comparable_name(text: str) -> str:
     Spacing in CUAD's text is sometimes broken (`SOFT WARE`), so spaces are
     ignored completely. Accents stay: `Spôk` is not `Spok`.
     """
-    # NFC makes one accent the same however it is encoded. Case folding makes the
-    # capitals of `ß` match (`STRASSE`). A mark stays because it belongs to its
-    # letter: dropped, the Hindi `कुमार` would equal `कमर`.
-    text = unicodedata.normalize("NFC", text).casefold()
+    # Accents are split from their letters before the case is folded, as Unicode's
+    # caseless match does, so `ΐ` matches its capital, `Ι` and two marks. Folding
+    # makes `ß` match `SS`.
+    text = unicodedata.normalize("NFD", text).casefold()
+    # A mark stays because it belongs to its letter: dropped, `कुमार` would equal `कमर`.
     return "".join(
         character
         for character in text
@@ -49,7 +50,7 @@ def read_document_name_answer(answer: str) -> AcceptedValues:
     """
     parts = [part.strip() for part in answer.split(PART_BREAK)]
     for part in parts:
-        if not comparable_name(part):
+        if not any(character.isalnum() for character in part):
             raise ValueError(f"no name in the answer: {answer!r}")
 
     if len(parts) == 1:

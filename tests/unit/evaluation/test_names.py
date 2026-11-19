@@ -47,6 +47,11 @@ def test_capitals_match_even_when_the_letter_changes_size() -> None:
     assert same_name("Straße GmbH", "STRASSE GMBH")
 
 
+def test_a_letter_matches_its_capital_written_with_separate_marks() -> None:
+    """`ΐ` has no capital letter of its own: its capital is `Ι` and two marks."""
+    assert same_name("Μαΐου", "Μαΐου".upper())
+
+
 def test_a_mark_that_belongs_to_a_letter_is_kept() -> None:
     """The Hindi names Kumar and Kamar differ only by a vowel sign."""
     assert not same_name("कुमार", "कमर")
@@ -115,6 +120,12 @@ def test_an_answer_with_no_name_in_a_part_raises(answer: str) -> None:
     """The document name is never skipped, so this is a bug in the data."""
     with pytest.raises(ValueError):
         read_document_name_answer(answer)
+
+
+def test_an_accent_mark_alone_is_not_a_name() -> None:
+    """Marks are kept when comparing, but a part needs a letter or digit."""
+    with pytest.raises(ValueError):
+        read_document_name_answer("AMENDMENT\n\n\N{COMBINING ACUTE ACCENT}")
 
 
 # Skipped without the dataset; one CI job downloads it and fails on any skip.
