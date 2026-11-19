@@ -124,6 +124,7 @@ def test_real_file_has_the_published_shapes() -> None:
             elif gold.values == (Perpetual.PERPETUAL,):
                 perpetual_only += 1
             else:
+                assert len(gold.values) == 1, answer
                 one_date += 1
         counts = (one_date, perpetual_only, two_values, redacted_only)
         assert counts == expected_counts, field_name
