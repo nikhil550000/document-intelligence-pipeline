@@ -21,10 +21,15 @@ def comparable_name(text: str) -> str:
     Spacing in CUAD's text is sometimes broken (`SOFT WARE`), so spaces are
     ignored completely. Accents stay: `Spôk` is not `Spok`.
     """
-    # An accent written as a separate mark would be dropped as punctuation, and the
-    # same name would then score differently depending on how it was encoded.
-    text = unicodedata.normalize("NFC", text).lower()
-    return "".join(character for character in text if character.isalnum())
+    # NFC makes one accent the same however it is encoded. Case folding makes the
+    # capitals of `ß` match (`STRASSE`). A mark stays because it belongs to its
+    # letter: dropped, the Hindi `कुमार` would equal `कमर`.
+    text = unicodedata.normalize("NFC", text).casefold()
+    return "".join(
+        character
+        for character in text
+        if character.isalnum() or unicodedata.category(character).startswith("M")
+    )
 
 
 def same_name(first: str, second: str) -> bool:

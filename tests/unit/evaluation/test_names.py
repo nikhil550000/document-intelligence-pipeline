@@ -42,6 +42,16 @@ def test_an_accent_written_as_a_separate_mark_is_still_an_accent() -> None:
     assert not same_name("Spôk", "Spok")
 
 
+def test_capitals_match_even_when_the_letter_changes_size() -> None:
+    """`ß` is `SS` in capitals."""
+    assert same_name("Straße GmbH", "STRASSE GMBH")
+
+
+def test_a_mark_that_belongs_to_a_letter_is_kept() -> None:
+    """The Hindi names Kumar and Kamar differ only by a vowel sign."""
+    assert not same_name("कुमार", "कमर")
+
+
 def test_the_whole_title_must_match() -> None:
     """A title that only contains the other is a different title."""
     assert not same_name(
