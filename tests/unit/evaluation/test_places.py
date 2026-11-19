@@ -89,6 +89,7 @@ def test_one_place_is_kept_as_written() -> None:
         ("Illinois; New York", ("Illinois", "New York")),
         ("Texas; Singapore; Belgium", ("Texas", "Singapore", "Belgium")),
         ("New York; Massachussets", ("New York", "Massachussets")),
+        ("Ontario, Canada, New York", ("Ontario, Canada", "New York")),
     ],
 )
 def test_an_answer_with_several_places_is_right_on_any_one(
@@ -131,7 +132,9 @@ def test_a_redacted_answer_is_skipped() -> None:
     assert read_governing_law_answer("[* * *]") == Skipped(SkipRule.REDACTED)
 
 
-@pytest.mark.parametrize("answer", ["", "Delaware;;Illinois"])
+@pytest.mark.parametrize(
+    "answer", ["", "Delaware;;Illinois", "PRC;", "England;; Wales"]
+)
 def test_an_empty_piece_raises(answer: str) -> None:
     """No CUAD answer has one, so it is a bug in the data."""
     with pytest.raises(ValueError):

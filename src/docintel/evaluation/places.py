@@ -39,7 +39,8 @@ WORDS_IN_FRONT = re.compile(
 # Only these countries go after a comma, so `Delaware, Illinois` stays two places.
 COUNTRIES = r"(?:canada|australia|united kingdom|uk|united states|usa)"
 COUNTRY_BEHIND = re.compile(rf",\s*{COUNTRIES}\s*$", re.IGNORECASE)
-PLACE_SEPARATORS = re.compile(rf";|,(?!\s*{COUNTRIES}\s*(?:;|$))", re.IGNORECASE)
+# A comma may follow the country: `Ontario, Canada, New York` is two places.
+PLACE_SEPARATORS = re.compile(rf";|,(?!\s*{COUNTRIES}\s*(?:;|,|$))", re.IGNORECASE)
 
 # The only pieces of CUAD's answers that are not a place.
 NOT_A_PLACE = frozenset(
@@ -81,16 +82,16 @@ def read_governing_law_answer(answer: str) -> AcceptedValues | Skipped:
     Raises:
         ValueError: A piece is empty.
     """
+    places = [piece.strip() for piece in PLACE_SEPARATORS.split(answer)]
+    if "" in places:
+        raise ValueError(f"empty piece in the answer: {answer!r}")
     # `England; Wales` is one place, so a spelling in the table is not cut.
     if comparable_name(answer) in SAME_PLACE_BY_COMPARABLE:
         return AcceptedValues((answer.strip(),))
 
     values = []
     dropped_for = []
-    for piece in PLACE_SEPARATORS.split(answer):
-        place = piece.strip()
-        if not place:
-            raise ValueError(f"empty piece in the answer: {answer!r}")
+    for place in places:
         rule = rule_that_drops(place)
         if rule is None:
             values.append(place)
