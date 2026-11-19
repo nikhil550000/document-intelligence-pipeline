@@ -5,6 +5,7 @@ import pytest
 from docintel.evaluation.cuad import MASTER_CLAUSES_PATH, load_cuad_answers
 from docintel.evaluation.gold import AcceptedValues
 from docintel.evaluation.names import (
+    PART_BREAK,
     comparable_name,
     read_document_name_answer,
     same_name,
@@ -33,6 +34,12 @@ def test_only_letters_and_digits_are_compared(first: str, second: str) -> None:
 def test_accents_are_compared_as_they_are() -> None:
     """`Spôk` is not `Spok`."""
     assert not same_name("Spôk", "Spok")
+
+
+def test_an_accent_written_as_a_separate_mark_is_still_an_accent() -> None:
+    """`Spôk` is the same name however it is encoded, and still not `Spok`."""
+    assert same_name("Spôk", "Spôk")
+    assert not same_name("Spôk", "Spok")
 
 
 def test_the_whole_title_must_match() -> None:
@@ -67,11 +74,24 @@ def test_a_title_in_parts_is_right_on_any_part_or_on_all_joined() -> None:
     )
 
 
-def test_a_title_broken_over_lines_is_joined_in_order() -> None:
-    """CUAD has `AMENDMENT AND TERMINATION`, `OF`, `JOINT VENTURE AGREEMENT`."""
-    answer = "AMENDMENT AND TERMINATION \n\nOF \n\nJOINT VENTURE AGREEMENT"
-    gold = read_document_name_answer(answer)
-    assert gold.values[-1] == "AMENDMENT AND TERMINATION OF JOINT VENTURE AGREEMENT"
+@pytest.mark.parametrize(
+    ("answer", "title"),
+    [
+        (
+            "AMENDMENT AND TERMINATION \n\nOF \n\nJOINT VENTURE AGREEMENT",
+            "AMENDMENT AND TERMINATION OF JOINT VENTURE AGREEMENT",
+        ),
+        (
+            "ADDENDUM TO \n\nZEBRA� PARTNERCONNECT DISTRIBUTOR AGREEMENT",
+            "ADDENDUM TO ZEBRA� PARTNERCONNECT DISTRIBUTOR AGREEMENT",
+        ),
+    ],
+)
+def test_a_title_broken_over_lines_is_right_only_when_joined(
+    answer: str, title: str
+) -> None:
+    """A part alone, such as `OF`, is not a title."""
+    assert read_document_name_answer(answer) == AcceptedValues((title,))
 
 
 def test_a_square_bracket_alone_is_not_a_redaction() -> None:
@@ -98,14 +118,20 @@ def test_real_file_has_the_published_shapes() -> None:
     raw_answers = [by_field["document_name"].answer for by_field in answers.values()]
 
     one_title = 0
-    in_parts = 0
+    broken_over_lines = 0
+    two_titles = 0
     for answer in raw_answers:
         gold = read_document_name_answer(answer)
-        if len(gold.values) == 1:
+        if PART_BREAK not in answer:
+            assert len(gold.values) == 1, answer
             one_title += 1
+        elif len(gold.values) == 1:
+            broken_over_lines += 1
         else:
-            in_parts += 1
-    assert (one_title, in_parts) == (496, 14)
+            # Each of the two titles, and both joined.
+            assert len(gold.values) == 3, answer
+            two_titles += 1
+    assert (one_title, broken_over_lines, two_titles) == (496, 2, 12)
 
     assert len(set(raw_answers)) == 285
     assert len({comparable_name(answer) for answer in raw_answers}) == 243
