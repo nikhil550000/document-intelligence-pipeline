@@ -10,7 +10,7 @@ from docintel.evaluation.pieces import cut_into_pieces
 
 # Taken last in the piece, because a renewal count or "successive" may come first.
 # The optional bracket covers `three (3) years` and the slip `60) days`.
-DURATION_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\)?\s*(day|week|month|year)s?")
+DURATION_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\)?\s*(day|week|month|year)s?\b")
 
 UNITS = {
     "day": DurationUnit.DAYS,
@@ -30,7 +30,8 @@ def read_duration_answer(answer: str) -> AcceptedValues | Skipped:
     """
     values = []
     dropped_for = []
-    for piece in cut_into_pieces(answer):
+    # One CUAD answer ends in a separator: `successive 12 months; successive 6 months;`.
+    for piece in cut_into_pieces(answer.strip().removesuffix(";")):
         rule = rule_that_drops(piece)
         if rule is None:
             values.append(read_duration_piece(piece))

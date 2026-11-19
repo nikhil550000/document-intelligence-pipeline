@@ -114,9 +114,11 @@ def test_a_duration_stays_when_another_piece_is_dropped() -> None:
     assert read_duration_answer("5 years; []") == accepted(Duration(5, YEAR))
 
 
-@pytest.mark.parametrize("answer", ["soon", "0.5 month", "5 fortnights"])
+@pytest.mark.parametrize(
+    "answer", ["soon", "0.5 month", "5 fortnights", "5 weekdays", "5 years;;2 years"]
+)
 def test_a_piece_that_is_no_duration_raises(answer: str) -> None:
-    """Nothing is dropped without a rule, and a half month is not a whole number."""
+    """Nothing is dropped without a rule; `5 weekdays` is not 5 weeks."""
     with pytest.raises(ValueError):
         read_duration_answer(answer)
 
@@ -169,5 +171,6 @@ def test_real_file_has_the_published_shapes() -> None:
             elif len(gold.values) == 2:
                 counts["two"] += 1
             else:
+                assert len(gold.values) == 1, answer
                 counts["one"] += 1
         assert tuple(counts.values()) == expected_counts, field_name
