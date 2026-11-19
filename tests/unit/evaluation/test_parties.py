@@ -106,6 +106,7 @@ def test_an_answer_with_an_empty_piece_or_no_party_raises(answer: str) -> None:
         ("Corio Inc", "Corio Inc."),
         ("Cellco Partnership d/b/a Verizon Wireless", "Cellco Partnership"),
         ("Pretzel Time, Inc. doing business as Pretzel Time", "Pretzel Time, Inc."),
+        ("Cellco Partnership d/b/a Verizon\nWireless", "Cellco Partnership"),
     ],
 )
 def test_names_that_are_the_same_party(first: str, second: str) -> None:

@@ -13,7 +13,10 @@ CURLY_QUOTES = str.maketrans(
 ALIAS_START = re.compile(r'\([^()]*"|"')
 ALIAS = re.compile(r'"([^"]*)"')
 # A trading name is another name for the same party, so it is no second party.
-TRADING_NAME = re.compile(r"\b(?:d/b/a|dba|doing business as)\b.*", re.IGNORECASE)
+# Text copied from a PDF may break it over lines, so the cut runs past line breaks.
+TRADING_NAME = re.compile(
+    r"\b(?:d/b/a|dba|doing business as)\b.*", re.IGNORECASE | re.DOTALL
+)
 THE_IN_FRONT = re.compile(r"^the\s+", re.IGNORECASE)
 # These words describe the parties together: `MS and MSCI individually as "Party"`.
 GROUP_WORDS = re.compile(
