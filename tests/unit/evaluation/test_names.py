@@ -57,6 +57,14 @@ def test_a_mark_that_belongs_to_a_letter_is_kept() -> None:
     assert not same_name("कुमार", "कमर")
 
 
+def test_a_mark_on_a_dropped_symbol_is_dropped_too() -> None:
+    """An emoji-style `®` is `®` and an invisible mark, and both are ignored."""
+    assert same_name(
+        "ZEBRA®\N{VARIATION SELECTOR-16} PARTNERCONNECT DISTRIBUTOR AGREEMENT",
+        "ZEBRA® PARTNERCONNECT DISTRIBUTOR AGREEMENT",
+    )
+
+
 def test_the_whole_title_must_match() -> None:
     """A title that only contains the other is a different title."""
     assert not same_name(

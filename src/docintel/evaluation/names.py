@@ -25,12 +25,20 @@ def comparable_name(text: str) -> str:
     # caseless match does, so `ΐ` matches its capital, `Ι` and two marks. Folding
     # makes `ß` match `SS`.
     text = unicodedata.normalize("NFD", text).casefold()
-    # A mark stays because it belongs to its letter: dropped, `कुमार` would equal `कमर`.
-    return "".join(
-        character
-        for character in text
-        if character.isalnum() or unicodedata.category(character).startswith("M")
-    )
+    # A mark belongs to the character before it. It stays with a letter: dropped,
+    # `कुमार` would equal `कमर`. It goes with a symbol, as the invisible mark that
+    # asks for `®` in emoji style does.
+    kept = []
+    keep_marks = False
+    for character in text:
+        if unicodedata.category(character).startswith("M"):
+            if keep_marks:
+                kept.append(character)
+        else:
+            keep_marks = character.isalnum()
+            if keep_marks:
+                kept.append(character)
+    return "".join(kept)
 
 
 def same_name(first: str, second: str) -> bool:
