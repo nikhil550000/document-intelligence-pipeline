@@ -5,9 +5,7 @@ from datetime import date
 
 from docintel.domain.values import Perpetual
 from docintel.evaluation.gold import AcceptedValues, Skipped, SkipRule
-
-# A slash cuts only with a space on each side, so the slashes inside a date stay.
-PIECE_SEPARATORS = re.compile(r";|,| / ")
+from docintel.evaluation.pieces import cut_into_pieces
 
 # CUAD's annotators wrote every date as month/day/year, whatever the contract prints.
 DATE_PATTERN = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})")
@@ -24,8 +22,8 @@ def read_date_answer(answer: str, field_name: str) -> AcceptedValues | Skipped:
             other than the expiration date.
     """
     values: list[date | Perpetual] = []
-    for piece in PIECE_SEPARATORS.split(answer):
-        text = piece.lower().replace(" ", "")
+    for piece in cut_into_pieces(answer):
+        text = piece.replace(" ", "")
         if "[" in text:
             continue
         values.append(read_piece(text, field_name))

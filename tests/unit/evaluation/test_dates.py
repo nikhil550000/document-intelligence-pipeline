@@ -79,6 +79,12 @@ def test_a_date_that_is_not_a_real_day_raises() -> None:
         read_date_answer("2/30/14", "agreement_date")
 
 
+def test_an_empty_piece_raises() -> None:
+    """A date is not dropped without a rule, even when the gap is a typing slip."""
+    with pytest.raises(ValueError):
+        read_date_answer("09/01/2006;;8/31/2007", "effective_date")
+
+
 def test_a_piece_that_is_not_a_date_raises() -> None:
     """Nothing is dropped without a rule."""
     with pytest.raises(ValueError):
@@ -118,6 +124,7 @@ def test_real_file_has_the_published_shapes() -> None:
             elif gold.values == (Perpetual.PERPETUAL,):
                 perpetual_only += 1
             else:
+                assert len(gold.values) == 1, answer
                 one_date += 1
         counts = (one_date, perpetual_only, two_values, redacted_only)
         assert counts == expected_counts, field_name
