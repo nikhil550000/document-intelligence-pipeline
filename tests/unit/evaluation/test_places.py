@@ -66,9 +66,26 @@ def test_names_for_the_same_place_are_equal(spelling: str, place: str) -> None:
     assert same_place(spelling, place)
 
 
+@pytest.mark.parametrize(
+    ("spelling", "place"),
+    [
+        ("England, United Kingdom", "England"),
+        ("the PRC", "China"),
+        ("State of Massachussets", "Massachusetts"),
+        ("the Republic of China", "Taiwan"),
+    ],
+)
+def test_another_spelling_matches_with_words_around_it(
+    spelling: str, place: str
+) -> None:
+    """The words around the name do not hide another spelling of the same place."""
+    assert same_place(spelling, place)
+
+
 def test_the_republic_of_china_is_not_china() -> None:
     """It is Taiwan, though dropping "Republic of" alone would give China."""
     assert not same_place("Republic of China", "China")
+    assert not same_place("the Republic of China", "China")
     assert not same_place("R.O.C.", "People's Republic of China")
 
 

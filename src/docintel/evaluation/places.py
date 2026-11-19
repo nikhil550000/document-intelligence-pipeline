@@ -32,9 +32,9 @@ SAME_PLACE_BY_COMPARABLE = {
 }
 
 # Contracts write "the State of New York" where CUAD wrote `New York`.
+THE_IN_FRONT = re.compile(r"^the\s+", re.IGNORECASE)
 WORDS_IN_FRONT = re.compile(
-    r"^(?:the\s+)?(?:(?:state|commonwealth|province|republic)\s+of\s+)?",
-    re.IGNORECASE,
+    r"^(?:state|commonwealth|province|republic)\s+of\s+", re.IGNORECASE
 )
 # Only these countries go after a comma, so `Delaware, Illinois` stays two places.
 COUNTRIES = r"(?:canada|australia|united kingdom|uk|united states|usa)"
@@ -57,15 +57,19 @@ NOT_A_PLACE = frozenset(
 def comparable_place(text: str) -> str:
     """Gives the form in which two place names are compared.
 
-    Another spelling of the same place is replaced first, then "State of" and
-    similar words in front and a country after a comma are dropped.
+    "The" and "State of" and similar words in front, and a country after a comma,
+    are dropped. Another spelling of the same place is replaced by that place.
     """
-    same_place = SAME_PLACE_BY_COMPARABLE.get(comparable_name(text))
-    if same_place is not None:
-        return same_place
-    text = WORDS_IN_FRONT.sub("", text.strip())
-    text = COUNTRY_BEHIND.sub("", text)
-    return comparable_name(text)
+    as_written = text.strip()
+    without_the_or_country = COUNTRY_BEHIND.sub("", THE_IN_FRONT.sub("", as_written))
+    bare_name = WORDS_IN_FRONT.sub("", without_the_or_country)
+    # Looked up at each step: `Republic of China` matches before "Republic of" goes,
+    # and `England, United Kingdom` only once the country has gone.
+    for name in (as_written, without_the_or_country, bare_name):
+        same_place = SAME_PLACE_BY_COMPARABLE.get(comparable_name(name))
+        if same_place is not None:
+            return same_place
+    return comparable_name(bare_name)
 
 
 def same_place(first: str, second: str) -> bool:
