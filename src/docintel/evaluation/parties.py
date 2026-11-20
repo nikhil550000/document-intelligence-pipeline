@@ -4,6 +4,7 @@ import re
 
 from docintel.evaluation.gold import PartyNames, Skipped, SkipRule
 from docintel.evaluation.names import comparable_name
+from docintel.evaluation.parties_by_hand import PARTIES_BY_HAND
 
 CURLY_QUOTES = str.maketrans(
     {"\N{LEFT DOUBLE QUOTATION MARK}": '"', "\N{RIGHT DOUBLE QUOTATION MARK}": '"'}
@@ -59,9 +60,10 @@ def without_trading_name(name: str) -> str:
 def read_parties_answer(answer: str) -> PartyNames | Skipped:
     """Reads CUAD's answer for the parties into the names it holds.
 
-    Each piece between semicolons holds one name, the text in front of its alias.
-    A piece that names no party is dropped. When only blanks are left, the answer
-    is skipped as redacted.
+    Each piece between semicolons is first looked up in the pieces read by hand.
+    Otherwise its name is the text in front of its alias, and a piece that names
+    no party is dropped. When only blanks are left, the answer is skipped as
+    redacted.
 
     Raises:
         ValueError: A piece is empty, or no piece names a party and none is a blank.
@@ -70,9 +72,12 @@ def read_parties_answer(answer: str) -> PartyNames | Skipped:
     for alias in ALIAS.findall(answer.translate(CURLY_QUOTES)):
         aliases.add(comparable_name(alias))
 
-    names = []
+    names: list[str] = []
     found_a_blank = False
     for piece in cut_parties_answer(answer):
+        if piece in PARTIES_BY_HAND:
+            names.extend(PARTIES_BY_HAND[piece])
+            continue
         name = name_in_piece(piece)
         # Nothing in front of the alias: `(collectively "Parties")`.
         if not name:
