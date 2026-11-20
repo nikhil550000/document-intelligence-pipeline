@@ -155,6 +155,20 @@ def test_a_clearly_better_set_of_answers_has_a_difference_above_zero() -> None:
     assert reversed_difference.micro.f1.high < 0
 
 
+def test_a_score_either_set_lacks_has_no_difference() -> None:
+    """A set that never answered has no precision, so there is no precision gap."""
+    answered = governing_law_answers(found=10, missed=0)
+    silent = {}
+    for contract in answered:
+        silent[contract] = {"governing_law": MISSED}
+
+    difference = difference_intervals(answered, silent, seed=RESAMPLING_SEED, draws=50)
+
+    governing_law = difference.by_field["governing_law"]
+    assert governing_law.precision is None
+    assert governing_law.recall == Interval(low=1.0, high=1.0, draws=50)
+
+
 def test_two_sets_of_answers_for_different_contracts_cannot_be_compared() -> None:
     """A difference on other contracts would measure the contracts, not the answers."""
     with pytest.raises(ValueError):

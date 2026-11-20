@@ -73,7 +73,8 @@ def difference_intervals(
     """Finds a 95% interval for each score of the first set minus the second.
 
     Both sets are scored on the same draws, so the difference comes from the
-    answers and not from which contracts were drawn.
+    answers and not from which contracts were drawn. A draw in which either set
+    has no value for a score is left out of that score's difference.
 
     Raises:
         ValueError: The two sets of answers are not for the same contracts.
