@@ -17,7 +17,8 @@ ALIAS = re.compile(r'"([^"]*)"')
 TRADING_NAME = re.compile(
     r"\b(?:d/b/a|dba|doing business as)\b.*", re.IGNORECASE | re.DOTALL
 )
-THE_IN_FRONT = re.compile(r"^the\s+", re.IGNORECASE)
+# Punctuation in front, as in a quoted `"The John Hopkins University"`, is no word.
+THE_IN_FRONT = re.compile(r"^\W*the\s+", re.IGNORECASE)
 # These words describe the parties together: `MS and MSCI individually as "Party"`.
 GROUP_WORDS = re.compile(
     r"\b(?:individually|collectively|each|together|referred)\b", re.IGNORECASE
@@ -33,13 +34,26 @@ def comparable_party(name: str) -> str:
     A trading name after "d/b/a" and a leading "The" are dropped, then only the
     letters and digits are kept. `Inc.` stays different from `Incorporated`.
     """
-    name = TRADING_NAME.sub("", name).strip()
-    return comparable_name(THE_IN_FRONT.sub("", name))
+    # "The" goes first, so that `The DBA Group` keeps the name `DBA Group`.
+    name = THE_IN_FRONT.sub("", name.strip())
+    return comparable_name(without_trading_name(name))
 
 
 def same_party(first: str, second: str) -> bool:
     """Tells whether two party names name the same party."""
     return comparable_party(first) == comparable_party(second)
+
+
+def without_trading_name(name: str) -> str:
+    """Cuts the text from "d/b/a" on, when a name stands in front of it."""
+    trading_name = TRADING_NAME.search(name)
+    if trading_name is None:
+        return name
+    # With nothing in front, `DBA Group` is a legal name, not a trading name.
+    in_front = name[: trading_name.start()]
+    if not comparable_name(in_front):
+        return name
+    return in_front
 
 
 def read_parties_answer(answer: str) -> PartyNames | Skipped:
@@ -94,7 +108,7 @@ def name_in_piece(piece: str) -> str:
     alias_start = ALIAS_START.search(piece)
     if alias_start is not None:
         piece = piece[: alias_start.start()]
-    name = TRADING_NAME.sub("", piece).strip()
+    name = without_trading_name(piece).strip()
     # Seven pieces open with a bracket that is never closed: `(DGT Corp. ("DGT")`.
     if name.startswith("(") and ")" not in name:
         name = name[1:].strip()

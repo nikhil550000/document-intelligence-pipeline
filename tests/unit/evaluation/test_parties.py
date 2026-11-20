@@ -107,6 +107,8 @@ def test_an_answer_with_an_empty_piece_or_no_party_raises(answer: str) -> None:
         ("Cellco Partnership d/b/a Verizon Wireless", "Cellco Partnership"),
         ("Pretzel Time, Inc. doing business as Pretzel Time", "Pretzel Time, Inc."),
         ("Cellco Partnership d/b/a Verizon\nWireless", "Cellco Partnership"),
+        ('"The John Hopkins University"', "John Hopkins University"),
+        ("The DBA Group", "DBA Group"),
     ],
 )
 def test_names_that_are_the_same_party(first: str, second: str) -> None:
@@ -132,6 +134,13 @@ def test_names_that_are_only_close_are_different_parties(
 def test_the_is_dropped_only_as_a_word() -> None:
     """A name that starts with the letters "The" keeps them."""
     assert not same_party("Theravance, Inc.", "ravance, Inc.")
+
+
+def test_a_name_that_starts_with_dba_is_kept() -> None:
+    """With no name in front, "DBA" is part of the legal name."""
+    assert not same_party("DBA Group", "DBA Corporation")
+    answer = 'DBA Group, Inc. ("Company"); Beta Inc. ("Buyer")'
+    assert read_parties_answer(answer) == PartyNames(("DBA Group, Inc.", "Beta Inc."))
 
 
 # Skipped without the dataset; one CI job downloads it and fails on any skip.
