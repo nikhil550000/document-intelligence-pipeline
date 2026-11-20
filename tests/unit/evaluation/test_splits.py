@@ -8,6 +8,7 @@ from docintel.evaluation.splits import (
     Splits,
     count_positives,
     find_positive_contracts,
+    read_list,
     split_contracts,
     write_lists,
 )
@@ -117,3 +118,21 @@ def test_lists_are_written_one_name_per_line(tmp_path: Path) -> None:
     assert (folder / "dev.txt").read_bytes() == b"Name, With Comma.pdf\nb.pdf\n"
     assert (folder / "test.txt").read_bytes() == b"c.pdf\n"
     assert (folder / "smoke.txt").read_bytes() == b"b.pdf\n"
+
+
+def test_a_list_is_read_back_as_it_was_written(tmp_path: Path) -> None:
+    """Names with spaces and commas come back whole and in their order."""
+    splits = Splits(
+        dev=["Name, With Comma.pdf", "b.pdf"], test=["c.pdf"], smoke=["b.pdf"]
+    )
+    write_lists(splits, tmp_path)
+
+    assert read_list(tmp_path, "dev") == ["Name, With Comma.pdf", "b.pdf"]
+    assert read_list(tmp_path, "test") == ["c.pdf"]
+
+
+def test_windows_line_endings_do_not_reach_the_names(tmp_path: Path) -> None:
+    """Git can turn the line endings into CRLF when it checks the lists out."""
+    (tmp_path / "dev.txt").write_bytes(b"a.pdf\r\nb.pdf\r\n")
+
+    assert read_list(tmp_path, "dev") == ["a.pdf", "b.pdf"]

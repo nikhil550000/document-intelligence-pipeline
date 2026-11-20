@@ -114,3 +114,10 @@ def write_lists(splits: Splits, folder: Path) -> None:
         text = "\n".join(file_names) + "\n"
         # The file is committed, so line endings must not depend on the machine.
         (folder / f"{list_name}.txt").write_text(text, encoding="utf-8", newline="\n")
+
+
+def read_list(folder: Path, list_name: str) -> list[str]:
+    """Reads back one list written by `write_lists`, such as "dev"."""
+    # Git may check the file out with CRLF line endings; splitting on lines drops them.
+    text = (folder / f"{list_name}.txt").read_text(encoding="utf-8")
+    return text.splitlines()
