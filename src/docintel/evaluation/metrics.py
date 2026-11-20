@@ -27,19 +27,21 @@ class Report:
     weigh more. `macro` is the plain mean of the fields' scores.
     """
 
-    counts_by_field: dict[str, Counts]
     scores_by_field: dict[str, Scores]
     scores_by_field_type: dict[FieldType, Scores]
     micro: Scores
     macro: Scores
 
 
-def score_report(counts_by_contract: list[dict[str, Counts]]) -> Report:
-    """Computes the scores of one set of answers.
+def add_up_by_field(counts_by_contract: list[dict[str, Counts]]) -> dict[str, Counts]:
+    """Adds up the counts of each field over the contracts of a set.
 
     Args:
         counts_by_contract: For each contract of the set, the counts of each of
             its fields that is not skipped.
+
+    Returns:
+        The counts of every field. A field skipped in every contract has none.
     """
     counts_by_field = {}
     for field in ALL_FIELDS:
@@ -48,7 +50,11 @@ def score_report(counts_by_contract: list[dict[str, Counts]]) -> Report:
             if field.name in contract_counts:
                 counts_of_field.append(contract_counts[field.name])
         counts_by_field[field.name] = add_counts(counts_of_field)
+    return counts_by_field
 
+
+def score_report(counts_by_field: dict[str, Counts]) -> Report:
+    """Computes the scores of one set of answers from the counts of every field."""
     scores_by_field = {}
     for field_name, field_counts in counts_by_field.items():
         scores_by_field[field_name] = scores_from_counts(field_counts)
@@ -64,7 +70,7 @@ def score_report(counts_by_contract: list[dict[str, Counts]]) -> Report:
 
     micro = scores_from_counts(add_counts(list(counts_by_field.values())))
     macro = mean_scores(list(scores_by_field.values()))
-    return Report(counts_by_field, scores_by_field, scores_by_field_type, micro, macro)
+    return Report(scores_by_field, scores_by_field_type, micro, macro)
 
 
 def add_counts(counts_list: list[Counts]) -> Counts:
