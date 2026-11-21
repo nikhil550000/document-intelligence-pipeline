@@ -50,3 +50,7 @@ plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not restart'"
+markers = [
+    "restart: replaces the service containers; run on its own with pytest -m restart",
+]
