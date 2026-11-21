@@ -4,6 +4,7 @@ from pathlib import Path
 
 import typer
 
+from docintel.config import Settings
 from docintel.domain.fields import NON_CLAUSE_FIELDS
 from docintel.evaluation.cuad import MASTER_CLAUSES_PATH, load_cuad_answers
 from docintel.evaluation.cuad_gold import (
@@ -25,6 +26,7 @@ from docintel.evaluation.splits import (
     split_contracts,
     write_lists,
 )
+from docintel.storage.migrations import MIGRATIONS_FOLDER, apply_migrations
 
 DATA_FOLDER = Path("data")
 CONFIG_FOLDER = Path("configs")
@@ -32,6 +34,8 @@ CONFIG_FOLDER = Path("configs")
 app = typer.Typer(help="Extract structured records from contracts.")
 data_app = typer.Typer(help="Manage the CUAD dataset.")
 app.add_typer(data_app, name="data")
+database_app = typer.Typer(help="Manage the database.")
+app.add_typer(database_app, name="db")
 
 
 @data_app.command("download")
@@ -120,3 +124,16 @@ def answer_counts() -> None:
                 f"{field.name:<29}{label:<35}{all_count:>5}{dev_count:>5}"
                 f"{test_count:>6}"
             )
+
+
+@database_app.command("migrate")
+def migrate() -> None:
+    """Apply the numbered SQL files that the database has not run yet."""
+    settings = Settings()
+    applied = apply_migrations(
+        settings.database_url.get_secret_value(), MIGRATIONS_FOLDER
+    )
+    if not applied:
+        typer.echo("Nothing to apply: the database is up to date.")
+    for file_name in applied:
+        typer.echo(f"Applied {file_name}.")
