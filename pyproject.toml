@@ -7,6 +7,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "boto3>=1.44.9",
+    "psycopg[binary]>=3.3.9",
+    "pydantic-settings>=2.16.3",
     "typer>=0.29.1",
 ]
 
@@ -23,6 +26,7 @@ python-preference = "only-system"
 
 [dependency-groups]
 dev = [
+    "boto3-stubs[s3]>=1.44.9",
     "mypy>=2.4.1",
     "pytest>=9.2.0",
     "ruff>=0.17.5",
@@ -41,6 +45,8 @@ convention = "google"
 strict = true
 python_version = "3.13"
 files = ["src"]
+# Lets mypy know that settings are read from the environment, not passed in.
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
