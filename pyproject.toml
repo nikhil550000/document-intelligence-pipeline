@@ -10,6 +10,7 @@ dependencies = [
     "boto3>=1.44.9",
     "psycopg[binary]>=3.3.9",
     "pydantic-settings>=2.16.3",
+    "pypdfium2>=5.15.2",
     "typer>=0.29.1",
 ]
 
@@ -47,6 +48,11 @@ python_version = "3.13"
 files = ["src"]
 # Lets mypy know that settings are read from the environment, not passed in.
 plugins = ["pydantic.mypy"]
+
+# pypdfium2 ships without type information.
+[[tool.mypy.overrides]]
+module = ["pypdfium2", "pypdfium2.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
