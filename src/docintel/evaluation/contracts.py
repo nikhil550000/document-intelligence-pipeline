@@ -1,10 +1,40 @@
-"""Find the PDF of each of CUAD's answer rows."""
+"""Find the PDF of each of CUAD's answer rows, and the rows left out of the lists."""
 
 from pathlib import Path
 
 from docintel.evaluation.dataset import CUAD_FOLDER_NAME
 
 PDF_FOLDER = Path("data") / CUAD_FOLDER_NAME / "CUAD_v1" / "full_contract_pdf"
+
+# Rows left out of every list, each with the reason. Each file is a copy, or a
+# part, of another contract's file, which stays; with both, the same text could
+# be in dev and in test.
+LEFT_OUT = {
+    "ADUROBIOTECH,INC_06_02_2020-EX-10.7-CONSULTING AGREEMENT(1).PDF": (
+        "the same bytes as ADUROBIOTECH,INC_06_02_2020-EX-10.7-CONSULTING AGREEMENT.PDF"
+    ),
+    "ARMSTRONGFLOORING,INC_01_07_2019-EX-10.2-INTELLECTUAL PROPERTY AGREEMENT.PDF": (
+        "the same agreement as ArmstrongFlooringInc_20190107_8-K_EX-10.2_11471795_"
+        "EX-10.2_Intellectual Property Agreement.pdf, with two attached forms added"
+    ),
+    (
+        "NETGEAR,INC_04_21_2003-EX-10.16-AMENDMENT TO THE DISTRIBUTOR AGREEMENT "
+        "BETWEEN INGRAM MICRO AND NETGEAR-.pdf"
+    ): (
+        "its first page is the last page of "
+        "NETGEAR,INC_04_21_2003-EX-10.16-DISTRIBUTOR AGREEMENT.pdf, and its second "
+        "page is all of NETGEAR,INC_04_21_2003-EX-10.16- AMENDMENT #2 TO THE "
+        "DISTRIBUTION AGREEMENT.pdf"
+    ),
+    (
+        "WOMENSGOLFUNLIMITEDINC_03_29_2000-EX-10.13-ENDORSEMENT AGREEMENT - "
+        "Intellectual Property Rights                 Confidentiality and Non-Use "
+        "Obligations Agreement.pdf"
+    ): (
+        "pages 6 and 7 of "
+        "WOMENSGOLFUNLIMITEDINC_03_29_2000-EX-10.13-ENDORSEMENT AGREEMENT.PDF"
+    ),
+}
 
 # The 11 answer rows that do not give the file name of their PDF, each next to
 # that file name. Every other row gives it exactly.

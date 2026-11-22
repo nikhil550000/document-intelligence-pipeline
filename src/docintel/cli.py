@@ -6,6 +6,7 @@ import typer
 
 from docintel.config import Settings
 from docintel.domain.fields import NON_CLAUSE_FIELDS
+from docintel.evaluation.contracts import LEFT_OUT
 from docintel.evaluation.cuad import MASTER_CLAUSES_PATH, load_cuad_answers
 from docintel.evaluation.cuad_gold import (
     CUAD_HAS_NOTHING,
@@ -60,12 +61,16 @@ def split() -> None:
         DEV_SIZE,
         SMOKE_SIZE,
         MIN_POSITIVES_IN_DEV,
+        set(LEFT_OUT),
     )
     write_lists(splits, CONFIG_FOLDER)
     typer.echo(
         f"Wrote {len(splits.dev)} dev, {len(splits.test)} test and "
         f"{len(splits.smoke)} smoke contracts to {CONFIG_FOLDER}."
     )
+    typer.echo(f"Left out of every list: {len(LEFT_OUT)}")
+    for row_name, reason in LEFT_OUT.items():
+        typer.echo(f"  {row_name}: {reason}")
 
     dev_counts = count_positives(positives_by_field, splits.dev)
     test_counts = count_positives(positives_by_field, splits.test)
@@ -105,9 +110,11 @@ def answer_counts() -> None:
         kinds_and_labels.append((rule.value, f"skipped: {rule.value}"))
     kinds_and_labels.append((CUAD_HAS_NOTHING, CUAD_HAS_NOTHING))
 
+    left_out_count = len(lists["all"]) - len(lists["dev"]) - len(lists["test"])
     typer.echo(
         f"{len(lists['all'])} contracts: {len(lists['dev'])} in dev, "
-        f"{len(lists['test'])} in test. Clause fields are never skipped."
+        f"{len(lists['test'])} in test, {left_out_count} left out of both. "
+        "Clause fields are never skipped."
     )
     typer.echo("")
     typer.echo(f"{'Field':<29}{'Answer':<35}{'all':>5}{'dev':>5}{'test':>6}")

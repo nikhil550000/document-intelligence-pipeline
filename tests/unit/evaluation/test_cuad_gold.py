@@ -7,6 +7,7 @@ import pytest
 
 from docintel.domain.fields import ALL_FIELDS, CLAUSE_FIELDS, FieldType
 from docintel.domain.values import Duration, DurationUnit, Perpetual
+from docintel.evaluation.contracts import LEFT_OUT
 from docintel.evaluation.cuad import (
     MASTER_CLAUSES_PATH,
     CuadAnswer,
@@ -212,7 +213,8 @@ def test_real_file_is_scored_and_skipped_as_counted_by_hand() -> None:
     gold_answers = read_gold_answers(load_cuad_answers(MASTER_CLAUSES_PATH))
     dev = read_list(Path("configs"), "dev")
     test = read_list(Path("configs"), "test")
-    assert sorted(dev + test) == sorted(gold_answers)
+    # A row is in one list, or left out of both with its reason.
+    assert sorted(dev + test + list(LEFT_OUT)) == sorted(gold_answers)
 
     kinds = [SCORED]
     for rule in SkipRule:
@@ -221,14 +223,14 @@ def test_real_file_is_scored_and_skipped_as_counted_by_hand() -> None:
     # Scored; skipped as redacted, passage only, perpetual renewal, date in a
     # duration field, no named place; CUAD has nothing.
     expected_dev = {
-        "document_name": (100, 0, 0, 0, 0, 0, 0),
-        "parties": (100, 0, 0, 0, 0, 0, 0),
-        "agreement_date": (77, 11, 1, 0, 0, 0, 11),
-        "effective_date": (60, 9, 8, 0, 0, 0, 23),
-        "expiration_date": (55, 5, 19, 0, 0, 0, 21),
-        "renewal_term": (29, 0, 3, 0, 0, 0, 68),
-        "notice_to_terminate_renewal": (18, 0, 3, 0, 0, 0, 79),
-        "governing_law": (87, 0, 0, 0, 0, 0, 13),
+        "document_name": (96, 0, 0, 0, 0, 0, 0),
+        "parties": (96, 0, 0, 0, 0, 0, 0),
+        "agreement_date": (74, 11, 1, 0, 0, 0, 10),
+        "effective_date": (57, 9, 8, 0, 0, 0, 22),
+        "expiration_date": (53, 5, 19, 0, 0, 0, 19),
+        "renewal_term": (29, 0, 3, 0, 0, 0, 64),
+        "notice_to_terminate_renewal": (18, 0, 3, 0, 0, 0, 75),
+        "governing_law": (85, 0, 0, 0, 0, 0, 11),
     }
     expected_test = {
         "document_name": (410, 0, 0, 0, 0, 0, 0),
@@ -267,4 +269,4 @@ def test_real_file_is_scored_and_skipped_as_counted_by_hand() -> None:
             if isinstance(gold, PartyNames):
                 distinct_names = {comparable_party(name) for name in gold.names}
                 names[list_name] += len(distinct_names)
-    assert names == {"dev": 283, "test": 986}
+    assert names == {"dev": 273, "test": 986}

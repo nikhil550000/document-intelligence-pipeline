@@ -2,9 +2,16 @@
 
 from pathlib import Path
 
+import pytest
+
 from docintel.domain.fields import ALL_FIELDS, CLAUSE_FIELD_NAMES
-from docintel.evaluation.cuad import CuadAnswer
+from docintel.evaluation.contracts import LEFT_OUT
+from docintel.evaluation.cuad import MASTER_CLAUSES_PATH, CuadAnswer, load_cuad_answers
 from docintel.evaluation.splits import (
+    DEV_SIZE,
+    MIN_POSITIVES_IN_DEV,
+    SMOKE_SIZE,
+    SPLIT_SEED,
     Splits,
     count_positives,
     find_positive_contracts,
@@ -23,8 +30,10 @@ POSITIVES_BY_FIELD = {
 }
 
 
-def make_splits(seed: int = 2026) -> Splits:
+def make_splits(seed: int = 2026, left_out: set[str] | None = None) -> Splits:
     """Splits the made-up table into 10 dev, 20 test and 3 smoke contracts."""
+    if left_out is None:
+        left_out = set()
     return split_contracts(
         CONTRACTS,
         POSITIVES_BY_FIELD,
@@ -32,6 +41,7 @@ def make_splits(seed: int = 2026) -> Splits:
         dev_size=10,
         smoke_size=3,
         min_positives_in_dev=3,
+        left_out=left_out,
     )
 
 
@@ -72,6 +82,24 @@ def test_same_seed_gives_the_same_lists() -> None:
 def test_a_different_seed_gives_different_lists() -> None:
     """The seed is really used."""
     assert make_splits(seed=2026).dev != make_splits(seed=7).dev
+
+
+def test_a_contract_left_out_leaves_its_list_and_no_other_contract_moves() -> None:
+    """It is taken out after the split, so the others keep the list they had."""
+    before = make_splits()
+    left_out = {before.smoke[0], before.test[0]}
+
+    after = make_splits(left_out=left_out)
+
+    assert after.dev == [
+        contract for contract in before.dev if contract not in left_out
+    ]
+    assert after.test == [
+        contract for contract in before.test if contract not in left_out
+    ]
+    # Smoke takes the next dev contract in the shuffled order, so it keeps its size.
+    assert len(after.smoke) == 3
+    assert set(after.smoke) <= set(after.dev)
 
 
 def test_lists_are_sorted() -> None:
@@ -136,3 +164,32 @@ def test_windows_line_endings_do_not_reach_the_names(tmp_path: Path) -> None:
     (tmp_path / "dev.txt").write_bytes(b"a.pdf\r\nb.pdf\r\n")
 
     assert read_list(tmp_path, "dev") == ["a.pdf", "b.pdf"]
+
+
+# Skipped without the dataset; one CI job downloads it and fails on any skip.
+@pytest.mark.skipif(
+    not MASTER_CLAUSES_PATH.exists(),
+    reason="CUAD is not downloaded; run `docintel data download`",
+)
+def test_splitting_the_real_file_again_gives_the_committed_lists() -> None:
+    """The seed, the rules and the rows left out give back the lists in configs/."""
+    answers = load_cuad_answers(MASTER_CLAUSES_PATH)
+    positives_by_field = find_positive_contracts(answers)
+
+    splits = split_contracts(
+        list(answers),
+        positives_by_field,
+        SPLIT_SEED,
+        DEV_SIZE,
+        SMOKE_SIZE,
+        MIN_POSITIVES_IN_DEV,
+        set(LEFT_OUT),
+    )
+
+    assert splits.dev == read_list(Path("configs"), "dev")
+    assert splits.test == read_list(Path("configs"), "test")
+    assert splits.smoke == read_list(Path("configs"), "smoke")
+    assert len(splits.dev) == 96
+    # Every clause field keeps its minimum in dev with the four rows left out.
+    dev_counts = count_positives(positives_by_field, splits.dev)
+    assert min(dev_counts.values()) >= MIN_POSITIVES_IN_DEV
