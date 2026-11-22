@@ -45,6 +45,7 @@ def split_contracts(
     dev_size: int,
     smoke_size: int,
     min_positives_in_dev: int,
+    left_out: set[str],
 ) -> Splits:
     """Picks the dev contracts so that every clause field has enough positives.
 
@@ -52,10 +53,12 @@ def split_contracts(
         contracts: Every contract file name.
         positives_by_field: For each clause field, the contracts that are positive.
         seed: Seed for the shuffle.
-        dev_size: How many contracts `dev` has when it is complete.
+        dev_size: How many contracts `dev` has before any is left out.
         smoke_size: How many contracts `smoke` has, taken from `dev`.
         min_positives_in_dev: The positives each field gets in `dev`, where the
             contracts have enough of them.
+        left_out: Contracts that go in no list. They are taken out once `dev` is
+            filled, so every other contract stays in the list it would have had.
     """
     shuffled = sorted(contracts)
     random.Random(seed).shuffle(shuffled)
@@ -84,16 +87,21 @@ def split_contracts(
         if contract not in dev:
             dev.append(contract)
 
+    kept_dev = []
+    for contract in dev:
+        if contract not in left_out:
+            kept_dev.append(contract)
+
     # A seeded random sample of dev, not only the contracts added for rare fields.
     smoke: list[str] = []
     for contract in shuffled:
         if len(smoke) >= smoke_size:
             break
-        if contract in dev:
+        if contract in kept_dev:
             smoke.append(contract)
 
-    test = sorted(set(contracts).difference(dev))
-    return Splits(dev=sorted(dev), test=test, smoke=sorted(smoke))
+    test = sorted(set(contracts).difference(dev).difference(left_out))
+    return Splits(dev=sorted(kept_dev), test=test, smoke=sorted(smoke))
 
 
 def count_positives(
