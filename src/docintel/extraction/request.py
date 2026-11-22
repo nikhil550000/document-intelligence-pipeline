@@ -1,5 +1,6 @@
 """The request that asks a model for the record of one contract."""
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,3 +59,14 @@ def build_request(
         "max_tokens": settings.max_tokens,
         "reasoning_effort": settings.reasoning_effort,
     }
+
+
+def request_sha256(request: dict[str, Any]) -> str:
+    """Gives the request's hash, the key under which its answer is found again.
+
+    The model, the prompt, the contract and every setting are in the request, so
+    a change to any of them gives a new key and a new call.
+    """
+    # Keys sorted, so that the same request always gives the same text.
+    text = json.dumps(request, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()
