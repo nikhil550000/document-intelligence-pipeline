@@ -189,6 +189,7 @@ def add_field_values(
     record: ContractRecord,
 ) -> None:
     """Writes one row per field, with the answer in the column of its type."""
+    rows = []
     for field_name in ContractRecord.model_fields:
         answer = getattr(record, field_name)
         values: dict[str, Any] = {
@@ -217,10 +218,7 @@ def add_field_values(
             values["duration_amount"] = answer.value.amount
             values["duration_unit"] = answer.value.unit.value
         evidence = answer.model_dump(mode="json")["evidence"]
-        connection.execute(
-            "INSERT INTO field_values (extraction_id, field_name, present, date_value,"
-            " perpetual, duration_amount, duration_unit, text_value, party_names,"
-            " evidence) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        rows.append(
             (
                 extraction_id,
                 field_name,
@@ -232,5 +230,16 @@ def add_field_values(
                 values["text_value"],
                 values["party_names"],
                 Jsonb(evidence),
-            ),
+            )
         )
+    # One COPY for the 41 rows: on this machine every statement costs a round trip.
+    with (
+        connection.cursor() as cursor,
+        cursor.copy(
+            "COPY field_values (extraction_id, field_name, present, date_value,"
+            " perpetual, duration_amount, duration_unit, text_value, party_names,"
+            " evidence) FROM STDIN"
+        ) as copy,
+    ):
+        for row in rows:
+            copy.write_row(row)
