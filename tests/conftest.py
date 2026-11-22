@@ -1,5 +1,6 @@
 """Things made in code for many tests: a small PDF, and an empty record."""
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -47,6 +48,12 @@ def make_pdf(page_texts: list[str]) -> bytes:
     pdf += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
     pdf += f"startxref\n{table_offset}\n%%EOF\n"
     return pdf.encode("ascii")
+
+
+@pytest.fixture
+def pdf_of_pages() -> Callable[[list[str]], bytes]:
+    """Makes a PDF with one page for each text given."""
+    return make_pdf
 
 
 @pytest.fixture

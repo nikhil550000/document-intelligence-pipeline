@@ -1,5 +1,8 @@
 """The `docintel` command-line entry point."""
 
+import subprocess
+from collections import Counter
+from decimal import Decimal
 from pathlib import Path
 
 import psycopg
@@ -28,9 +31,14 @@ from docintel.evaluation.splits import (
     split_contracts,
     write_lists,
 )
-from docintel.pipeline import store_contract
+from docintel.extraction.budget import Budget
+from docintel.extraction.client import ModelClient, make_sdk
+from docintel.extraction.prices import PRICES_PATH, read_prices
+from docintel.parsing.pdfium import PARSER_NAME, PARSER_VERSION
+from docintel.pipeline import read_run_config, run_batch, store_contract
 from docintel.storage.migrations import MIGRATIONS_FOLDER, apply_migrations
 from docintel.storage.objects import make_s3_client
+from docintel.storage.runs import add_run, find_stored_text
 
 DATA_FOLDER = Path("data")
 CONFIG_FOLDER = Path("configs")
@@ -203,3 +211,88 @@ def migrate() -> None:
         typer.echo("Nothing to apply: the database is up to date.")
     for file_name in applied:
         typer.echo(f"Applied {file_name}.")
+
+
+def committed_code() -> str:
+    """Returns the commit the code is at, after checking nothing tracked has changed.
+
+    Raises:
+        typer.Exit: A tracked file differs from the commit, so the run could not
+            be repeated from the commit alone.
+    """
+    changed = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    if changed:
+        typer.echo("Commit or undo these changes first, so the run can be repeated:")
+        typer.echo(changed)
+        raise typer.Exit(code=1)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+@app.command("run")
+def run(
+    config_path: Path,
+    contracts: str = typer.Option(help="The list to run on: smoke, dev or test."),
+    ceiling_usd: str = typer.Option(help="The most the run may spend, in dollars."),
+) -> None:
+    """Extract a record from each contract of a list, with one configuration."""
+    settings = Settings()
+    git_commit = committed_code()
+    config, config_as_read = read_run_config(config_path)
+    ceiling = Decimal(ceiling_usd)
+    prices = read_prices(PRICES_PATH, config.model.model)
+    row_names = read_list(CONFIG_FOLDER, contracts)
+    pdfs_by_row = find_contract_pdfs(PDF_FOLDER, row_names)
+    s3_client = make_s3_client(settings)
+    client = ModelClient(make_sdk(settings, config.base_url), config.retry)
+    budget = Budget(ceiling, prices)
+
+    database_url = settings.database_url.get_secret_value()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        stored_texts = {}
+        for row_name, pdf_path in pdfs_by_row.items():
+            stored = find_stored_text(
+                connection, pdf_path.name, PARSER_NAME, PARSER_VERSION
+            )
+            if stored is None:
+                typer.echo(f"{pdf_path.name} is not stored. Run: docintel data store")
+                raise typer.Exit(code=1)
+            stored_texts[row_name] = stored
+        run_id = add_run(
+            connection,
+            config_path.stem,
+            config_as_read,
+            git_commit,
+            contracts,
+            ceiling,
+        )
+        typer.echo(
+            f"Run {run_id}: {len(stored_texts)} {contracts} contracts, "
+            f"ceiling ${ceiling}, prices read on {prices.read_on}."
+        )
+        outcome = run_batch(
+            connection,
+            s3_client,
+            settings.s3_bucket,
+            run_id,
+            config,
+            stored_texts,
+            client,
+            budget,
+            on_contract=lambda name, status: typer.echo(f"  {status:<13}{name}"),
+        )
+
+    counts = Counter(outcome.statuses.values())
+    typer.echo(
+        f"Run {outcome.status}: {len(outcome.statuses)} of {len(stored_texts)} "
+        f"contracts ended ({dict(counts)}). Calls to the provider: {client.calls}. "
+        f"Spent at most ${budget.spent_usd:.4f}."
+    )
+    if outcome.stop_reason is not None:
+        typer.echo(outcome.stop_reason)
