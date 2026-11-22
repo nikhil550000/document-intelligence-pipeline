@@ -45,6 +45,16 @@ uv run docintel data store
 
 This reads each contract's PDF page by page with [PDFium](https://pdfium.googlesource.com/pdfium/) and keeps the PDF and its text in the object store, each under the SHA-256 of its content, with a row for each in Postgres. It lists the pages that give no text: blank pages, and pages that are only a picture, since PDFium reads the text in the PDF and does no OCR. Running it again stores nothing new.
 
+### Extract the records
+
+Put a [Fireworks](https://fireworks.ai/) API key in `.env` as `FIREWORKS_API_KEY`, then:
+
+```
+uv run docintel run configs/pdfium-deepseek-flash.toml --contracts smoke --ceiling-usd 0.50
+```
+
+This sends each contract of a list (`smoke`, `dev` or `test`, from `configs/`) to the model the configuration names, checks that each answer has the shape of the record, and stores it. A contract whose calls all fail is stored as failed, with the reason, and the run goes on. Before every paid attempt the run holds back the most that attempt could cost, and it stops before any call the rest of its ceiling cannot cover. An answer is kept under the hash of the exact request that got it, so running the same configuration again makes no calls and costs nothing. The run records the git commit, so the working tree must have no changes to tracked files.
+
 ### Run the checks
 
 ```
