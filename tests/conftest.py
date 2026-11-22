@@ -1,6 +1,10 @@
-"""A small PDF made in code, for the tests that read or store one."""
+"""Things made in code for many tests: a small PDF, and an empty record."""
+
+from typing import Any
 
 import pytest
+
+from docintel.domain.fields import ALL_FIELDS, FieldType
 
 
 def make_pdf(page_texts: list[str]) -> bytes:
@@ -49,3 +53,17 @@ def make_pdf(page_texts: list[str]) -> bytes:
 def three_page_pdf() -> bytes:
     """A PDF of three pages whose middle page is blank."""
     return make_pdf(["First page", "", "Third page"])
+
+
+@pytest.fixture
+def empty_record() -> dict[str, Any]:
+    """A record as JSON in which the contract says nothing about any field."""
+    record: dict[str, Any] = {}
+    for field in ALL_FIELDS:
+        if field.type == FieldType.CLAUSE:
+            record[field.name] = {"evidence": [], "present": False}
+        elif field.type == FieldType.ENTITY_LIST:
+            record[field.name] = {"evidence": [], "names": []}
+        else:
+            record[field.name] = {"evidence": [], "value": None}
+    return record
