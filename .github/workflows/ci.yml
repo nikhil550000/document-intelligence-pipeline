@@ -25,7 +25,8 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
 
-  real-file-checks:
+  # Tests that need the real dataset or the services run here, and nowhere skip.
+  checks-with-data-and-services:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,8 +48,15 @@ jobs:
       # Checks the MD5 again, so a damaged cache is caught, not trusted.
       - run: uv run docintel data download
 
-      # A skipped real-file test would pass without checking anything, so any skip fails.
+      # The same Postgres and object store as on a developer's machine.
+      - run: cp .env.example .env
+      - run: docker compose up --detach --wait
+
+      # A skipped test would pass without checking anything, so any skip fails.
       - run: |
           uv run pytest -rs | tee pytest.log
           ! grep -q SKIPPED pytest.log
         shell: bash
+
+      # Last, because it replaces the service containers.
+      - run: uv run pytest -m restart
