@@ -37,6 +37,14 @@ uv run docintel db migrate
 
 This starts Postgres (on port 5433, so a Postgres already installed can keep 5432) and an S3-compatible object store, [SeaweedFS](https://github.com/seaweedfs/seaweedfs), on port 8333. Their data is kept in Docker volumes, so it survives the containers being stopped or replaced. `db migrate` applies the numbered SQL files in `src/docintel/storage/sql/` that the database has not run yet; running it again applies nothing.
 
+### Store the contracts
+
+```
+uv run docintel data store
+```
+
+This reads each contract's PDF page by page with [PDFium](https://pdfium.googlesource.com/pdfium/) and keeps the PDF and its text in the object store, each under the SHA-256 of its content, with a row for each in Postgres. It lists the pages that give no text: blank pages, and pages that are only a picture, since PDFium reads the text in the PDF and does no OCR. Running it again stores nothing new.
+
 ### Run the checks
 
 ```

@@ -2,11 +2,12 @@
 
 from pathlib import Path
 
+import psycopg
 import typer
 
 from docintel.config import Settings
 from docintel.domain.fields import NON_CLAUSE_FIELDS
-from docintel.evaluation.contracts import LEFT_OUT
+from docintel.evaluation.contracts import LEFT_OUT, PDF_FOLDER, find_contract_pdfs
 from docintel.evaluation.cuad import MASTER_CLAUSES_PATH, load_cuad_answers
 from docintel.evaluation.cuad_gold import (
     CUAD_HAS_NOTHING,
@@ -27,7 +28,9 @@ from docintel.evaluation.splits import (
     split_contracts,
     write_lists,
 )
+from docintel.pipeline import store_contract
 from docintel.storage.migrations import MIGRATIONS_FOLDER, apply_migrations
+from docintel.storage.objects import make_s3_client
 
 DATA_FOLDER = Path("data")
 CONFIG_FOLDER = Path("configs")
@@ -37,6 +40,13 @@ data_app = typer.Typer(help="Manage the CUAD dataset.")
 app.add_typer(data_app, name="data")
 database_app = typer.Typer(help="Manage the database.")
 app.add_typer(database_app, name="db")
+
+
+def echo_left_out() -> None:
+    """Prints the answer rows left out of every list, each with its reason."""
+    typer.echo(f"Left out of every list: {len(LEFT_OUT)}")
+    for row_name, reason in LEFT_OUT.items():
+        typer.echo(f"  {row_name}: {reason}")
 
 
 @data_app.command("download")
@@ -68,9 +78,7 @@ def split() -> None:
         f"Wrote {len(splits.dev)} dev, {len(splits.test)} test and "
         f"{len(splits.smoke)} smoke contracts to {CONFIG_FOLDER}."
     )
-    typer.echo(f"Left out of every list: {len(LEFT_OUT)}")
-    for row_name, reason in LEFT_OUT.items():
-        typer.echo(f"  {row_name}: {reason}")
+    echo_left_out()
 
     dev_counts = count_positives(positives_by_field, splits.dev)
     test_counts = count_positives(positives_by_field, splits.test)
@@ -131,6 +139,57 @@ def answer_counts() -> None:
                 f"{field.name:<29}{label:<35}{all_count:>5}{dev_count:>5}"
                 f"{test_count:>6}"
             )
+
+
+@data_app.command("store")
+def store() -> None:
+    """Store each contract's PDF and its text, read page by page, with their rows."""
+    settings = Settings()
+    row_names = list(load_cuad_answers(MASTER_CLAUSES_PATH))
+    # Every row must find its PDF before anything is stored.
+    pdfs_by_row = find_contract_pdfs(PDF_FOLDER, row_names)
+    typer.echo(f"All {len(row_names)} answer rows found their PDF.")
+    echo_left_out()
+
+    s3_client = make_s3_client(settings)
+    stored = 0
+    stored_before = 0
+    pages = 0
+    pages_without_text = 0
+    database_url = settings.database_url.get_secret_value()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        for row_name, pdf_path in pdfs_by_row.items():
+            if row_name in LEFT_OUT:
+                continue
+            parsed = store_contract(
+                connection,
+                s3_client,
+                settings.s3_bucket,
+                pdf_path.name,
+                pdf_path.read_bytes(),
+            )
+            if parsed is None:
+                stored_before += 1
+                continue
+            stored += 1
+            pages += len(parsed.pages)
+            # A blank page is a correct reading; a page that is only a picture is
+            # text this parser cannot see. Both are listed for a person to judge.
+            empty_page_numbers = []
+            for page_number, text in enumerate(parsed.pages, start=1):
+                if not text.strip():
+                    empty_page_numbers.append(str(page_number))
+            if empty_page_numbers:
+                pages_without_text += len(empty_page_numbers)
+                typer.echo(
+                    f"  {pdf_path.name}, pages without text: "
+                    f"{', '.join(empty_page_numbers)}"
+                )
+
+    typer.echo(
+        f"Stored {stored} contracts: {pages:,} pages, {pages_without_text} of them "
+        f"without text. {stored_before} were stored before."
+    )
 
 
 @database_app.command("migrate")
