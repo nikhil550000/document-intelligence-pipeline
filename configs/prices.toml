@@ -1,0 +1,9 @@
+# List prices in US dollars per million tokens, each with the day it was read.
+# Free or discounted use is still costed at these prices, so runs compare fairly.
+
+["accounts/fireworks/models/deepseek-v4p1-flash-1017"]
+read_on = 2026-11-22
+source = "https://fireworks.ai/pricing"
+input = 0.30
+cached_input = 0.006
+output = 1.20
