@@ -6,6 +6,7 @@ import time
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -123,6 +124,24 @@ def read_run_config(path: Path) -> tuple[RunConfig, dict[str, Any]]:
         ),
     )
     return run_config, config
+
+
+def longest_job(config: RunConfig) -> timedelta:
+    """The longest one contract can take, so a worker still past it has died.
+
+    The case counted is every attempt at the model running to its time limit,
+    with every wait between attempts.
+    """
+    retry = config.retry
+    seconds = retry.max_attempts * retry.timeout_seconds
+    wait = retry.first_wait_seconds
+    for _ in range(retry.max_attempts - 1):
+        seconds += wait
+        wait = wait * 2
+    # The text is parsed before the run. Reading it and storing the answer take
+    # well under a second; a minute leaves room for a slow database.
+    seconds += 60
+    return timedelta(seconds=seconds)
 
 
 def extract_contract(
