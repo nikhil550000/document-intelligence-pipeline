@@ -265,7 +265,7 @@ def run(
     contracts: str = typer.Option(help="The list to run on: smoke, dev or test."),
     ceiling_usd: str = typer.Option(help="The most the run may spend, in dollars."),
 ) -> None:
-    """Extract a record from each contract of a list, with one configuration."""
+    """Extract a record from each contract of a list, and report the run if it ends."""
     settings = Settings()
     git_commit = committed_code()
     config, config_as_read = read_run_config(config_path)
@@ -320,6 +320,9 @@ def run(
     )
     if outcome.stop_reason is not None:
         typer.echo(outcome.stop_reason)
+        return
+    typer.echo("")
+    report(str(run_id))
 
 
 class RunNotReportableError(Exception):
