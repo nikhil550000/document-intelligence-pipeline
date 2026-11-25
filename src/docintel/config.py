@@ -1,11 +1,11 @@
 """Settings read from the environment, or from a `.env` file in the working folder."""
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Where the database and the object storage are, and how to sign in to them."""
+    """Where the services are, and how to sign in to them."""
 
     # The prefix keeps these apart from the AWS_ variables that boto3 reads itself.
     # The file also holds Docker Compose's variables, which are not ours to read.
@@ -18,3 +18,8 @@ class Settings(BaseSettings):
     s3_access_key_id: str
     s3_secret_access_key: SecretStr
     s3_bucket: str
+    # Under the name the provider's own documentation uses. Only the commands
+    # that call a model need it.
+    fireworks_api_key: SecretStr | None = Field(
+        default=None, validation_alias="FIREWORKS_API_KEY"
+    )

@@ -8,7 +8,9 @@ license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "boto3>=1.44.9",
+    "openai>=3.57.0",
     "psycopg[binary]>=3.3.9",
+    "pydantic>=2.14.3",
     "pydantic-settings>=2.16.3",
     "pypdfium2>=5.15.2",
     "typer>=0.29.1",
