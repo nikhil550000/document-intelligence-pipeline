@@ -1,0 +1,16 @@
+# The text layer read by PDFium, and one model answering the whole record.
+parser = "pdfium"
+prompt_version = 1
+
+[model]
+base_url = "https://api.fireworks.ai/inference/v1"
+name = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
+# About five times the longest answer expected, and about 90 seconds of output.
+max_tokens = 16384
+# Off: with a schema the provider returns no thinking, and would bill it.
+reasoning_effort = "none"
+
+[retries]
+timeout_seconds = 300
+max_attempts = 4
+first_wait_seconds = 10

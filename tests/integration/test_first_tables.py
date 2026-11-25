@@ -35,8 +35,9 @@ def insert_document(connection: psycopg.Connection) -> UUID:
 def insert_run(connection: psycopg.Connection) -> UUID:
     """Writes a run row and returns its id."""
     row = connection.execute(
-        "INSERT INTO runs (config_name, config, git_commit)"
-        " VALUES ('smoke', '{}', %s) RETURNING id",
+        "INSERT INTO runs"
+        " (config_name, config, git_commit, contract_list, cost_ceiling_usd)"
+        " VALUES ('a-config', '{}', %s, 'smoke', 1) RETURNING id",
         (GIT_COMMIT,),
     ).fetchone()
     assert row is not None
@@ -50,19 +51,28 @@ def insert_extraction(
     record: str | None,
     failure_reason: str | None,
 ) -> int:
-    """Writes an extraction of a new document in a new run and returns its id."""
+    """Writes an extraction of a new document in a new run and returns its id.
+
+    A failed call has no response; every other extraction has one.
+    """
+    response_sha256 = None
+    if status != "failed":
+        response_sha256 = SHA256
     row = connection.execute(
         "INSERT INTO extractions (run_id, document_id, status, record,"
-        " failure_reason, model, prompt_version, schema_version, input_tokens,"
+        " failure_reason, model, prompt_version, schema_version, request_sha256,"
+        " response_sha256, from_cache, input_tokens, cached_input_tokens,"
         " output_tokens, cost_usd, total_seconds)"
-        " VALUES (%s, %s, %s, %s, %s, 'a-model', '1', '1', 100, 50, 0.01, 2.5)"
-        " RETURNING id",
+        " VALUES (%s, %s, %s, %s, %s, 'a-model', '1', '1', %s, %s, false, 100, 0,"
+        " 50, 0.01, 2.5) RETURNING id",
         (
             insert_run(connection),
             insert_document(connection),
             status,
             record,
             failure_reason,
+            SHA256,
+            response_sha256,
         ),
     ).fetchone()
     assert row is not None
@@ -111,6 +121,29 @@ def test_a_failed_extraction_cannot_have_a_record(
 def test_a_record_that_needs_review_is_stored(connection: psycopg.Connection) -> None:
     """A record that fails its checks is kept for a reviewer, not dropped."""
     assert insert_extraction(connection, "needs_review", "{}", None) > 0
+
+
+def test_output_that_did_not_load_is_stored_for_review_without_a_record(
+    connection: psycopg.Connection,
+) -> None:
+    """Its response and problems are kept even though no record could be made."""
+    assert insert_extraction(connection, "needs_review", None, None) > 0
+
+
+def test_a_valid_extraction_must_have_a_record(connection: psycopg.Connection) -> None:
+    """Valid means the output loaded, so its record is there."""
+    with pytest.raises(psycopg.errors.CheckViolation):
+        insert_extraction(connection, "valid", None, None)
+
+
+def test_a_stopped_run_must_say_why(connection: psycopg.Connection) -> None:
+    """A run that did not finish names the reason, such as its ceiling."""
+    run_id = insert_run(connection)
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        connection.execute(
+            "UPDATE runs SET status = 'stopped' WHERE id = %s", (run_id,)
+        )
 
 
 def test_a_date_and_perpetual_cannot_both_be_set(

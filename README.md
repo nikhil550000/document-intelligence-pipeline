@@ -45,6 +45,24 @@ uv run docintel data store
 
 This reads each contract's PDF page by page with [PDFium](https://pdfium.googlesource.com/pdfium/) and keeps the PDF and its text in the object store, each under the SHA-256 of its content, with a row for each in Postgres. It lists the pages that give no text: blank pages, and pages that are only a picture, since PDFium reads the text in the PDF and does no OCR. Running it again stores nothing new.
 
+### Extract the records
+
+Put a [Fireworks](https://fireworks.ai/) API key in `.env` as `FIREWORKS_API_KEY`, then:
+
+```
+uv run docintel run configs/pdfium-deepseek-flash.toml --contracts smoke --ceiling-usd 0.50
+```
+
+This sends each contract of a list (`smoke`, `dev` or `test`, from `configs/`) to the model the configuration names, checks that each answer has the shape of the record, and stores it. A contract whose calls all fail is stored as failed, with the reason, and the run goes on. Before every paid attempt the run holds back the most that attempt could cost, and it stops before any call the rest of its ceiling cannot cover. An answer is kept under the hash of the exact request that got it, so running the same configuration again makes no calls and costs nothing. The run records the git commit, so the working tree must have no changes to tracked files.
+
+### Report a run
+
+```
+uv run docintel report <run id>
+```
+
+This scores every contract of a finished run against CUAD's answers, stores the counts in Postgres, exports them as Parquet files, and computes the report from those files with [DuckDB](https://duckdb.org/) SQL: precision, recall and F1 per field, per field type and overall, each with a 95% interval found by drawing the contracts again at random 1,000 times. A contract that has no record, because its calls failed or its answer did not have the shape of a record, counts as answering nothing, so what CUAD has in it is missed. The report is written as Markdown and CSV into `reports/`, next to the Parquet files it was computed from, so anyone can compute it again without the database. A run stopped by its ceiling is not reported.
+
 ### Run the checks
 
 ```
