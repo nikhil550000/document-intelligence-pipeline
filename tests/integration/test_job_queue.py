@@ -26,6 +26,8 @@ from docintel.storage.jobs import (
 from docintel.storage.migrations import MIGRATIONS_FOLDER, apply_migrations
 
 HOUR = timedelta(hours=1)
+# The code the test runs are made from, and the workers built from it.
+CODE = "c" * 64
 
 
 @pytest.fixture
@@ -39,10 +41,10 @@ def connection(database_url: str) -> Iterator[psycopg.Connection]:
 def queue_run(connection: psycopg.Connection, how_many: int) -> UUID:
     """Writes a run and that many documents, queues a job for each, returns the run."""
     run = connection.execute(
-        "INSERT INTO runs"
-        " (config_name, config, git_commit, contract_list, cost_ceiling_usd)"
-        " VALUES ('a-config', %s, %s, 'smoke', 1) RETURNING id",
-        (Jsonb({"model": {"name": "a-model"}, "prompt_version": 1}), "b" * 40),
+        "INSERT INTO runs (config_name, config, git_commit, code_sha256,"
+        " contract_list, cost_ceiling_usd)"
+        " VALUES ('a-config', %s, %s, %s, 'smoke', 1) RETURNING id",
+        (Jsonb({"model": {"name": "a-model"}, "prompt_version": 1}), "b" * 40, CODE),
     ).fetchone()
     assert run is not None
     documents = connection.execute(
@@ -124,7 +126,7 @@ def test_two_workers_claiming_at_once_take_every_job_exactly_once(
         with psycopg.connect(database_url, autocommit=True) as own_connection:
             start.wait()
             while True:
-                job = claim_job(own_connection, HOUR)
+                job = claim_job(own_connection, HOUR, CODE)
                 if job is None:
                     return
                 taken[name].append(job.id)
@@ -152,8 +154,8 @@ def test_a_job_being_taken_is_skipped_by_another_worker_and_not_waited_for(
         # Waiting for the lock would fail at once instead of hanging the test.
         other.execute("SET lock_timeout = '100ms'")
         with connection.transaction():
-            first = claim_job(connection, HOUR)
-            second = claim_job(other, HOUR)
+            first = claim_job(connection, HOUR, CODE)
+            second = claim_job(other, HOUR, CODE)
 
     assert first is not None
     assert second is not None
@@ -169,12 +171,22 @@ def test_the_oldest_ready_job_is_taken_first(connection: psycopg.Connection) -> 
 
     claimed = []
     for _ in range(3):
-        job = claim_job(connection, HOUR)
+        job = claim_job(connection, HOUR, CODE)
         assert job is not None
         claimed.append(job.id)
 
     assert claimed == [row[0] for row in queued]
-    assert claim_job(connection, HOUR) is None
+    assert claim_job(connection, HOUR, CODE) is None
+
+
+def test_a_worker_built_from_other_code_leaves_the_run_alone(
+    connection: psycopg.Connection,
+) -> None:
+    """Its answers would not be the ones the run records, so it takes nothing."""
+    queue_run(connection, 1)
+
+    assert claim_job(connection, HOUR, "d" * 64) is None
+    assert claim_job(connection, HOUR, CODE) is not None
 
 
 def test_a_running_job_is_queued_again_only_once_past_its_time(
@@ -182,7 +194,7 @@ def test_a_running_job_is_queued_again_only_once_past_its_time(
 ) -> None:
     """A job left running by a worker that died waits out its time, then runs again."""
     queue_run(connection, 1)
-    job = claim_job(connection, HOUR)
+    job = claim_job(connection, HOUR, CODE)
     assert job is not None
 
     assert give_up_abandoned(connection) == []
@@ -193,9 +205,9 @@ def test_a_running_job_is_queued_again_only_once_past_its_time(
     assert job_row(connection, job)[:2] == ("queued", 1)
 
     # The first wait between attempts is a minute, so the job is not ready yet.
-    assert claim_job(connection, HOUR) is None
+    assert claim_job(connection, HOUR, CODE) is None
     wait_passes(connection)
-    second = claim_job(connection, HOUR)
+    second = claim_job(connection, HOUR, CODE)
     assert second is not None
     assert (second.id, second.attempt) == (job.id, 2)
 
@@ -205,12 +217,12 @@ def test_a_worker_that_lost_its_job_cannot_end_it(
 ) -> None:
     """A worker past its time, its job given to another, cannot mark that job."""
     queue_run(connection, 1)
-    late = claim_job(connection, HOUR)
+    late = claim_job(connection, HOUR, CODE)
     assert late is not None
     wait_passes(connection)
     give_up_abandoned(connection)
     wait_passes(connection)
-    current = claim_job(connection, HOUR)
+    current = claim_job(connection, HOUR, CODE)
     assert current is not None
 
     with pytest.raises(JobLostError):
@@ -226,14 +238,14 @@ def test_a_job_that_keeps_failing_ends_failed_with_its_reason(
     """After its last attempt the job is failed with the last reason, and not taken."""
     queue_run(connection, 1)
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        job = claim_job(connection, HOUR)
+        job = claim_job(connection, HOUR, CODE)
         assert job is not None
         assert job.attempt == attempt
         mark_failed(connection, job, f"timed out, attempt {attempt}")
         wait_passes(connection)
 
     assert job_row(connection, job) == ("failed", 3, "timed out, attempt 3")
-    assert claim_job(connection, HOUR) is None
+    assert claim_job(connection, HOUR, CODE) is None
     # The contract is stored as failed, so the run's report still counts it.
     assert extraction_of(connection, job) == (
         "failed",
@@ -251,7 +263,7 @@ def test_a_job_given_up_on_its_last_attempt_is_stored_as_failed(
     """A contract that outlives its worker every time still ends, and is counted."""
     queue_run(connection, 1)
     for _ in range(MAX_ATTEMPTS):
-        job = claim_job(connection, HOUR)
+        job = claim_job(connection, HOUR, CODE)
         assert job is not None
         wait_passes(connection)
         give_up_abandoned(connection)
@@ -267,8 +279,8 @@ def test_a_run_is_complete_once_its_last_job_has_ended(
 ) -> None:
     """One job ended leaves the run running; the second completes it."""
     run_id = queue_run(connection, 2)
-    first = claim_job(connection, HOUR)
-    second = claim_job(connection, HOUR)
+    first = claim_job(connection, HOUR, CODE)
+    second = claim_job(connection, HOUR, CODE)
     assert first is not None
     assert second is not None
 
@@ -283,8 +295,8 @@ def test_two_workers_ending_the_last_two_jobs_at_once_complete_the_run(
 ) -> None:
     """The second waits for the first to commit, so it sees both jobs ended."""
     run_id = queue_run(connection, 2)
-    first = claim_job(connection, HOUR)
-    second = claim_job(connection, HOUR)
+    first = claim_job(connection, HOUR, CODE)
+    second = claim_job(connection, HOUR, CODE)
     assert first is not None
     assert second is not None
 
@@ -310,7 +322,7 @@ def test_the_heartbeat_holds_a_job_but_never_past_its_longest_time(
 ) -> None:
     """Each heartbeat moves the time on, up to the cap; a lost job is not moved."""
     queue_run(connection, 1)
-    job = claim_job(connection, timedelta(minutes=2))
+    job = claim_job(connection, timedelta(minutes=2), CODE)
     assert job is not None
 
     assert extend_job(connection, job, timedelta(minutes=2), HOUR)
@@ -328,7 +340,7 @@ def test_a_returned_job_keeps_its_attempts_and_a_stopped_run_is_not_taken(
 ) -> None:
     """A job its run's ceiling could not pay for waits, uncounted, for the run."""
     run_id = queue_run(connection, 1)
-    job = claim_job(connection, HOUR)
+    job = claim_job(connection, HOUR, CODE)
     assert job is not None
 
     with connection.transaction():
@@ -339,12 +351,12 @@ def test_a_returned_job_keeps_its_attempts_and_a_stopped_run_is_not_taken(
         )
 
     assert job_row(connection, job) == ("queued", 0, None)
-    assert claim_job(connection, HOUR) is None
+    assert claim_job(connection, HOUR, CODE) is None
     connection.execute(
         "UPDATE runs SET status = 'running', stop_reason = NULL WHERE id = %s",
         (run_id,),
     )
-    again = claim_job(connection, HOUR)
+    again = claim_job(connection, HOUR, CODE)
     assert again is not None
     assert (again.id, again.attempt) == (job.id, 1)
     assert events_of(connection, again)[2] == (
@@ -359,16 +371,16 @@ def test_every_change_of_state_has_its_audit_row(
 ) -> None:
     """Queued, started, queued again, given up, started, succeeded: seven rows."""
     queue_run(connection, 1)
-    first = claim_job(connection, HOUR)
+    first = claim_job(connection, HOUR, CODE)
     assert first is not None
     mark_failed(connection, first, "server error")
     wait_passes(connection)
-    second = claim_job(connection, HOUR)
+    second = claim_job(connection, HOUR, CODE)
     assert second is not None
     wait_passes(connection)
     give_up_abandoned(connection)
     wait_passes(connection)
-    third = claim_job(connection, HOUR)
+    third = claim_job(connection, HOUR, CODE)
     assert third is not None
     mark_succeeded(connection, third)
 

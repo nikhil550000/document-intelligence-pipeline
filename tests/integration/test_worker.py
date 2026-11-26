@@ -20,7 +20,12 @@ from docintel.extraction.budget import cost_bound
 from docintel.extraction.prices import PRICES_PATH, call_cost, read_prices
 from docintel.extraction.request import build_request
 from docintel.parsing.pdfium import PARSER_NAME, PARSER_VERSION
-from docintel.pipeline import read_run_config, store_contract
+from docintel.pipeline import (
+    PACKAGE_FOLDER,
+    hash_of_code,
+    read_run_config,
+    store_contract,
+)
 from docintel.storage import jobs
 from docintel.storage.jobs import add_jobs, claim_job
 from docintel.storage.migrations import MIGRATIONS_FOLDER, apply_migrations
@@ -37,6 +42,7 @@ FAST_CONFIG = {
     "retries": {"timeout_seconds": 300, "max_attempts": 2, "first_wait_seconds": 0},
 }
 PRICES = read_prices(PRICES_PATH, CONFIG.model.model)
+CODE = hash_of_code(PACKAGE_FOLDER)
 
 type Handler = Callable[[httpx2.Request], httpx2.Response]
 
@@ -118,7 +124,13 @@ def queue_run(
 ) -> UUID:
     """Writes a run of the fast configuration with one job per document."""
     run_id = add_run(
-        connection, "pdfium-deepseek-flash", FAST_CONFIG, "0" * 40, "smoke", ceiling
+        connection,
+        "pdfium-deepseek-flash",
+        FAST_CONFIG,
+        "0" * 40,
+        CODE,
+        "smoke",
+        ceiling,
     )
     add_jobs(connection, run_id, document_ids)
     return run_id
@@ -145,6 +157,7 @@ def start_worker(
                 s3_client,
                 bucket,
                 provider.sdk_for,
+                CODE,
                 stop,
                 on_job=lambda job, outcome: outcomes.append(outcome),
             )
@@ -376,7 +389,7 @@ def test_a_run_stopped_by_its_ceiling_goes_on_once_the_ceiling_is_raised(
         "SELECT state, attempt FROM jobs WHERE state <> 'succeeded'"
     ).fetchall()
     assert waiting == [("queued", 0)]
-    assert claim_job(connection, worker.LEASE) is None
+    assert claim_job(connection, worker.LEASE, CODE) is None
 
     resume_run(connection, run_id, Decimal(1))
     work_until_run_ends(connection, database_url, s3_client, bucket, run_id, provider)

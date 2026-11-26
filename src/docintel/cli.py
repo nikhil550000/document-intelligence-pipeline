@@ -52,7 +52,12 @@ from docintel.evaluation.stored_gold import (
 from docintel.extraction.client import make_sdk
 from docintel.extraction.prices import PRICES_PATH, read_prices
 from docintel.parsing.pdfium import PARSER_NAME, PARSER_VERSION
-from docintel.pipeline import read_run_config, store_contract
+from docintel.pipeline import (
+    PACKAGE_FOLDER,
+    hash_of_code,
+    read_run_config,
+    store_contract,
+)
 from docintel.storage.jobs import Job, add_jobs, read_ended_jobs
 from docintel.storage.migrations import MIGRATIONS_FOLDER, apply_migrations
 from docintel.storage.objects import make_s3_client
@@ -272,6 +277,7 @@ def run(
     """Queue each contract of a list for the workers, and report the run if it ends."""
     settings = Settings()
     git_commit = committed_code()
+    code_sha256 = hash_of_code(PACKAGE_FOLDER)
     config, config_as_read = read_run_config(config_path)
     ceiling = Decimal(ceiling_usd)
     # Read here too, so that a model with no price fails before anything is queued.
@@ -297,6 +303,7 @@ def run(
                 config_path.stem,
                 config_as_read,
                 git_commit,
+                code_sha256,
                 contracts,
                 ceiling,
             )
@@ -305,7 +312,10 @@ def run(
             f"Run {run_id}: {len(document_ids)} {contracts} contracts queued, "
             f"ceiling ${ceiling} for each worker, prices read on {prices.read_on}."
         )
-        typer.echo("Workers take them: docker compose up --detach, or docintel worker.")
+        typer.echo(
+            f"Workers built from this code ({code_sha256[:12]}) take them: "
+            "docker compose up --detach --build worker, or docintel worker."
+        )
         complete = follow_run(connection, run_id)
     if complete:
         typer.echo("")
@@ -364,6 +374,7 @@ def worker() -> None:
     """Take contracts from the job queue one at a time, until stopped."""
     settings = Settings()
     s3_client = make_s3_client(settings)
+    code_sha256 = hash_of_code(PACKAGE_FOLDER)
     stop = threading.Event()
     # Ctrl+C, or `docker stop`: the worker finishes the contract it holds first.
     signal.signal(signal.SIGINT, lambda number, frame: stop.set())
@@ -377,13 +388,14 @@ def worker() -> None:
         psycopg.connect(database_url, autocommit=True) as connection,
         psycopg.connect(database_url, autocommit=True) as heartbeat_connection,
     ):
-        typer.echo("Waiting for jobs.")
+        typer.echo(f"Waiting for jobs of runs made from code {code_sha256[:12]}.")
         run_worker(
             connection,
             heartbeat_connection,
             s3_client,
             settings.s3_bucket,
             lambda base_url: make_sdk(settings, base_url),
+            code_sha256,
             stop,
             on_job=echo_job,
         )

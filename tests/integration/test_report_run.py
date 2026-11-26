@@ -82,7 +82,9 @@ def extraction(
 def new_run(connection: psycopg.Connection) -> UUID:
     """Writes the row of a run that has started."""
     config = {"parser": "pdfium", "prompt_version": 1, "model": {"name": "a-model"}}
-    return add_run(connection, "a-config", config, "c" * 40, "dev", Decimal(1))
+    return add_run(
+        connection, "a-config", config, "c" * 40, "d" * 64, "dev", Decimal(1)
+    )
 
 
 def document(connection: psycopg.Connection, file_name: str) -> UUID:

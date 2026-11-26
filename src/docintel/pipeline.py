@@ -28,6 +28,28 @@ if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
 
 
+PACKAGE_FOLDER = Path(__file__).parent
+
+
+def hash_of_code(folder: Path) -> str:
+    """Hashes every file of the package, so the same code gives the same hash anywhere.
+
+    Line endings are made the same first, because git writes them differently on
+    Windows, and paths are sorted as text, because Windows sorts paths otherwise.
+    """
+    names = []
+    for path in folder.rglob("*"):
+        if path.is_file() and "__pycache__" not in path.parts:
+            names.append(path.relative_to(folder).as_posix())
+    digest = hashlib.sha256()
+    for name in sorted(names):
+        content = (folder / name).read_bytes().replace(b"\r\n", b"\n")
+        # The lengths keep one file's end from passing for the next one's start.
+        digest.update(f"{name}\0{len(content)}\0".encode())
+        digest.update(content)
+    return digest.hexdigest()
+
+
 @dataclass(frozen=True)
 class RunConfig:
     """What a run does to each contract, read from one configuration file."""
