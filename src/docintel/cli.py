@@ -1,6 +1,9 @@
 """The `docintel` command-line entry point."""
 
+import signal
 import subprocess
+import threading
+import time
 from collections import Counter
 from datetime import UTC
 from decimal import Decimal
@@ -46,14 +49,14 @@ from docintel.evaluation.stored_gold import (
     read_gold_row,
     score_rows,
 )
-from docintel.extraction.budget import Budget
-from docintel.extraction.client import ModelClient, make_sdk
+from docintel.extraction.client import make_sdk
 from docintel.extraction.prices import PRICES_PATH, read_prices
 from docintel.parsing.pdfium import PARSER_NAME, PARSER_VERSION
-from docintel.pipeline import read_run_config, run_batch, store_contract
+from docintel.pipeline import read_run_config, store_contract
+from docintel.storage.jobs import Job, add_jobs, read_ended_jobs
 from docintel.storage.migrations import MIGRATIONS_FOLDER, apply_migrations
 from docintel.storage.objects import make_s3_client
-from docintel.storage.runs import add_run, find_stored_text
+from docintel.storage.runs import add_run, find_stored_text, resume_run
 from docintel.storage.scores import (
     read_extractions,
     read_gold_values,
@@ -62,6 +65,7 @@ from docintel.storage.scores import (
     replace_gold_values,
     replace_scores,
 )
+from docintel.worker import run_worker
 
 DATA_FOLDER = Path("data")
 CONFIG_FOLDER = Path("configs")
@@ -265,64 +269,125 @@ def run(
     contracts: str = typer.Option(help="The list to run on: smoke, dev or test."),
     ceiling_usd: str = typer.Option(help="The most the run may spend, in dollars."),
 ) -> None:
-    """Extract a record from each contract of a list, and report the run if it ends."""
+    """Queue each contract of a list for the workers, and report the run if it ends."""
     settings = Settings()
     git_commit = committed_code()
     config, config_as_read = read_run_config(config_path)
     ceiling = Decimal(ceiling_usd)
+    # Read here too, so that a model with no price fails before anything is queued.
     prices = read_prices(PRICES_PATH, config.model.model)
     row_names = read_list(CONFIG_FOLDER, contracts)
     pdfs_by_row = find_contract_pdfs(PDF_FOLDER, row_names)
-    s3_client = make_s3_client(settings)
-    client = ModelClient(make_sdk(settings, config.base_url), config.retry)
-    budget = Budget(ceiling, prices)
 
     database_url = settings.database_url.get_secret_value()
     with psycopg.connect(database_url, autocommit=True) as connection:
-        stored_texts = {}
-        for row_name, pdf_path in pdfs_by_row.items():
+        document_ids = []
+        for pdf_path in pdfs_by_row.values():
             stored = find_stored_text(
                 connection, pdf_path.name, PARSER_NAME, PARSER_VERSION
             )
             if stored is None:
                 typer.echo(f"{pdf_path.name} is not stored. Run: docintel data store")
                 raise typer.Exit(code=1)
-            stored_texts[row_name] = stored
-        run_id = add_run(
-            connection,
-            config_path.stem,
-            config_as_read,
-            git_commit,
-            contracts,
-            ceiling,
-        )
+            document_ids.append(stored.document_id)
+        # Together, so that no run is ever left without its jobs.
+        with connection.transaction():
+            run_id = add_run(
+                connection,
+                config_path.stem,
+                config_as_read,
+                git_commit,
+                contracts,
+                ceiling,
+            )
+            add_jobs(connection, run_id, document_ids)
         typer.echo(
-            f"Run {run_id}: {len(stored_texts)} {contracts} contracts, "
-            f"ceiling ${ceiling}, prices read on {prices.read_on}."
+            f"Run {run_id}: {len(document_ids)} {contracts} contracts queued, "
+            f"ceiling ${ceiling} for each worker, prices read on {prices.read_on}."
         )
-        outcome = run_batch(
+        typer.echo("Workers take them: docker compose up --detach, or docintel worker.")
+        complete = follow_run(connection, run_id)
+    if complete:
+        typer.echo("")
+        report(str(run_id))
+
+
+@app.command("resume")
+def resume(
+    run_id: str,
+    ceiling_usd: str = typer.Option(help="The run's new ceiling, in dollars."),
+) -> None:
+    """Carry on a run stopped by its ceiling with a higher one, and report it."""
+    settings = Settings()
+    database_url = settings.database_url.get_secret_value()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        resume_run(connection, UUID(run_id), Decimal(ceiling_usd))
+        complete = follow_run(connection, UUID(run_id))
+    if complete:
+        typer.echo("")
+        report(run_id)
+
+
+def follow_run(connection: psycopg.Connection, run_id: UUID) -> bool:
+    """Prints each contract as its job ends, then how the run ended.
+
+    Returns:
+        Whether the run is complete. It returns as soon as the run is stopped.
+    """
+    printed = set()
+    statuses = []
+    while True:
+        # Read before the jobs, so that every job ended by then is printed.
+        run = read_run(connection, run_id)
+        if run is None:
+            typer.echo(f"There is no run {run_id}.")
+            raise typer.Exit(code=1)
+        for job_id, file_name, status in read_ended_jobs(connection, run_id):
+            if job_id not in printed:
+                printed.add(job_id)
+                statuses.append(status)
+                typer.echo(f"  {status:<13}{file_name}")
+        if run.status != "running":
+            break
+        time.sleep(1)
+
+    counts = Counter(statuses)
+    typer.echo(f"Run {run.status}: {len(statuses)} contracts ended ({dict(counts)}).")
+    if run.status == "stopped":
+        typer.echo(f"{run.stop_reason}.")
+        typer.echo(f"To carry it on: docintel resume {run_id} --ceiling-usd <more>")
+    return run.status == "complete"
+
+
+@app.command("worker")
+def worker() -> None:
+    """Take contracts from the job queue one at a time, until stopped."""
+    settings = Settings()
+    s3_client = make_s3_client(settings)
+    stop = threading.Event()
+    # Ctrl+C, or `docker stop`: the worker finishes the contract it holds first.
+    signal.signal(signal.SIGINT, lambda number, frame: stop.set())
+    signal.signal(signal.SIGTERM, lambda number, frame: stop.set())
+
+    def echo_job(job: Job, outcome: str) -> None:
+        typer.echo(f"{outcome:<13}job {job.id}, attempt {job.attempt}")
+
+    database_url = settings.database_url.get_secret_value()
+    with (
+        psycopg.connect(database_url, autocommit=True) as connection,
+        psycopg.connect(database_url, autocommit=True) as heartbeat_connection,
+    ):
+        typer.echo("Waiting for jobs.")
+        run_worker(
             connection,
+            heartbeat_connection,
             s3_client,
             settings.s3_bucket,
-            run_id,
-            config,
-            stored_texts,
-            client,
-            budget,
-            on_contract=lambda name, status: typer.echo(f"  {status:<13}{name}"),
+            lambda base_url: make_sdk(settings, base_url),
+            stop,
+            on_job=echo_job,
         )
-
-    counts = Counter(outcome.statuses.values())
-    typer.echo(
-        f"Run {outcome.status}: {len(outcome.statuses)} of {len(stored_texts)} "
-        f"contracts ended ({dict(counts)}). Calls to the provider: {client.calls}. "
-        f"Spent at most ${budget.spent_usd:.4f}."
-    )
-    if outcome.stop_reason is not None:
-        typer.echo(outcome.stop_reason)
-        return
-    typer.echo("")
-    report(str(run_id))
+    typer.echo("Stopped.")
 
 
 class RunNotReportableError(Exception):

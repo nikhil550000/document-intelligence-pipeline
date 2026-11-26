@@ -74,6 +74,23 @@ def find_stored_text(
     return StoredText(document_id=row[0], text_sha256=row[1], parse_seconds=row[2])
 
 
+def read_stored_text(
+    connection: psycopg.Connection[TupleRow],
+    document_id: UUID,
+    parser: str,
+    parser_version: str,
+) -> StoredText | None:
+    """Finds where the text this parser version read from a document is."""
+    row = connection.execute(
+        "SELECT text_sha256, parse_seconds FROM parsed_texts"
+        " WHERE document_id = %s AND parser = %s AND parser_version = %s",
+        (document_id, parser, parser_version),
+    ).fetchone()
+    if row is None:
+        return None
+    return StoredText(document_id=document_id, text_sha256=row[0], parse_seconds=row[1])
+
+
 def add_run(
     connection: psycopg.Connection[TupleRow],
     config_name: str,
@@ -106,6 +123,18 @@ def finish_run(
         "UPDATE runs SET status = %s, stop_reason = %s, finished_at = now()"
         " WHERE id = %s",
         (status, stop_reason, run_id),
+    )
+
+
+def resume_run(
+    connection: psycopg.Connection[TupleRow], run_id: UUID, ceiling_usd: Decimal
+) -> None:
+    """Gives a run a new ceiling, and lets a run stopped by its old one go on."""
+    connection.execute(
+        "UPDATE runs SET cost_ceiling_usd = %s, status = 'running',"
+        " stop_reason = NULL, finished_at = NULL"
+        " WHERE id = %s AND status IN ('running', 'stopped')",
+        (ceiling_usd, run_id),
     )
 
 

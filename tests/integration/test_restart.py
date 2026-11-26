@@ -59,6 +59,7 @@ def test_a_stored_pdf_and_its_row_survive_recreated_containers(
             "--force-recreate",
             "--renew-anon-volumes",
             "--wait",
+            *SERVICES,
         ],
         check=True,
     )

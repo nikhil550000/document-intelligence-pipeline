@@ -34,6 +34,27 @@ services:
       timeout: 5s
       retries: 30
 
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      # Inside Compose the services are reached by their names and own ports.
+      DOCINTEL_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DOCINTEL_S3_ENDPOINT_URL: http://objectstore:8333
+    depends_on:
+      postgres:
+        condition: service_healthy
+      objectstore:
+        condition: service_healthy
+    # Each worker works on one contract at a time, so this is how many are sent
+    # to the provider at once, which keeps its rate limit in hand.
+    deploy:
+      replicas: 2
+    # `docker compose stop` lets a worker finish the contract it holds: up to
+    # 22 minutes with the committed configuration, if every model attempt times out.
+    stop_grace_period: 23m
+    restart: on-failure
+
 volumes:
   postgres-data:
   objectstore-data:
