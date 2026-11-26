@@ -1,22 +1,27 @@
 """Tests for the job queue, on the real Postgres, with several connections."""
 
 import threading
+import time
 from collections.abc import Iterator
 from datetime import timedelta
 from uuid import UUID
 
 import psycopg
 import pytest
+from psycopg.types.json import Jsonb
 
 from docintel.storage.jobs import (
+    ABANDONED,
     MAX_ATTEMPTS,
     Job,
     JobLostError,
     add_jobs,
     claim_job,
+    extend_job,
     give_up_abandoned,
     mark_failed,
     mark_succeeded,
+    return_job,
 )
 from docintel.storage.migrations import MIGRATIONS_FOLDER, apply_migrations
 
@@ -36,8 +41,8 @@ def queue_run(connection: psycopg.Connection, how_many: int) -> UUID:
     run = connection.execute(
         "INSERT INTO runs"
         " (config_name, config, git_commit, contract_list, cost_ceiling_usd)"
-        " VALUES ('a-config', '{}', %s, 'smoke', 1) RETURNING id",
-        ("b" * 40,),
+        " VALUES ('a-config', %s, %s, 'smoke', 1) RETURNING id",
+        (Jsonb({"model": {"name": "a-model"}, "prompt_version": 1}), "b" * 40),
     ).fetchone()
     assert run is not None
     documents = connection.execute(
@@ -67,6 +72,36 @@ def job_row(connection: psycopg.Connection, job: Job) -> tuple:
     ).fetchone()
     assert row is not None
     return row
+
+
+def run_status(connection: psycopg.Connection, run_id: UUID) -> str:
+    """The run's status."""
+    row = connection.execute("SELECT status FROM runs WHERE id = %s", (run_id,))
+    found = row.fetchone()
+    assert found is not None
+    status: str = found[0]
+    return status
+
+
+def extraction_of(connection: psycopg.Connection, job: Job) -> tuple:
+    """The job's contract as stored: status, reason, model, prompt, request."""
+    row = connection.execute(
+        "SELECT status, failure_reason, model, prompt_version, request_sha256"
+        " FROM extractions WHERE run_id = %s AND document_id = %s",
+        (job.run_id, job.document_id),
+    ).fetchone()
+    assert row is not None
+    return row
+
+
+def held_for(connection: psycopg.Connection, job: Job) -> timedelta:
+    """How long after it was taken the job is held until."""
+    row = connection.execute(
+        "SELECT taken_until - taken_at FROM jobs WHERE id = %s", (job.id,)
+    ).fetchone()
+    assert row is not None
+    held: timedelta = row[0]
+    return held
 
 
 def events_of(connection: psycopg.Connection, job: Job) -> list[tuple]:
@@ -199,6 +234,124 @@ def test_a_job_that_keeps_failing_ends_failed_with_its_reason(
 
     assert job_row(connection, job) == ("failed", 3, "timed out, attempt 3")
     assert claim_job(connection, HOUR) is None
+    # The contract is stored as failed, so the run's report still counts it.
+    assert extraction_of(connection, job) == (
+        "failed",
+        "timed out, attempt 3",
+        "a-model",
+        "1",
+        None,
+    )
+    assert run_status(connection, job.run_id) == "complete"
+
+
+def test_a_job_given_up_on_its_last_attempt_is_stored_as_failed(
+    connection: psycopg.Connection,
+) -> None:
+    """A contract that outlives its worker every time still ends, and is counted."""
+    queue_run(connection, 1)
+    for _ in range(MAX_ATTEMPTS):
+        job = claim_job(connection, HOUR)
+        assert job is not None
+        wait_passes(connection)
+        give_up_abandoned(connection)
+        wait_passes(connection)
+
+    assert job_row(connection, job) == ("failed", 3, ABANDONED)
+    assert extraction_of(connection, job)[:2] == ("failed", ABANDONED)
+    assert run_status(connection, job.run_id) == "complete"
+
+
+def test_a_run_is_complete_once_its_last_job_has_ended(
+    connection: psycopg.Connection,
+) -> None:
+    """One job ended leaves the run running; the second completes it."""
+    run_id = queue_run(connection, 2)
+    first = claim_job(connection, HOUR)
+    second = claim_job(connection, HOUR)
+    assert first is not None
+    assert second is not None
+
+    mark_succeeded(connection, first)
+    assert run_status(connection, run_id) == "running"
+    mark_succeeded(connection, second)
+    assert run_status(connection, run_id) == "complete"
+
+
+def test_two_workers_ending_the_last_two_jobs_at_once_complete_the_run(
+    connection: psycopg.Connection, database_url: str
+) -> None:
+    """The second waits for the first to commit, so it sees both jobs ended."""
+    run_id = queue_run(connection, 2)
+    first = claim_job(connection, HOUR)
+    second = claim_job(connection, HOUR)
+    assert first is not None
+    assert second is not None
+
+    def end_second() -> None:
+        with psycopg.connect(database_url, autocommit=True) as other:
+            assert second is not None
+            mark_succeeded(other, second)
+
+    with connection.transaction():
+        mark_succeeded(connection, first)
+        other_worker = threading.Thread(target=end_second)
+        other_worker.start()
+        # Time for the other worker to look at the run while this one has not
+        # committed; without the lock it would see the first job still running.
+        time.sleep(0.5)
+    other_worker.join()
+
+    assert run_status(connection, run_id) == "complete"
+
+
+def test_the_heartbeat_holds_a_job_but_never_past_its_longest_time(
+    connection: psycopg.Connection,
+) -> None:
+    """Each heartbeat moves the time on, up to the cap; a lost job is not moved."""
+    queue_run(connection, 1)
+    job = claim_job(connection, timedelta(minutes=2))
+    assert job is not None
+
+    assert extend_job(connection, job, timedelta(minutes=2), HOUR)
+    assert held_for(connection, job) > timedelta(minutes=1)
+    assert extend_job(connection, job, timedelta(minutes=2), timedelta(seconds=30))
+    assert held_for(connection, job) == timedelta(seconds=30)
+
+    wait_passes(connection)
+    give_up_abandoned(connection)
+    assert not extend_job(connection, job, timedelta(minutes=2), HOUR)
+
+
+def test_a_returned_job_keeps_its_attempts_and_a_stopped_run_is_not_taken(
+    connection: psycopg.Connection,
+) -> None:
+    """A job its run's ceiling could not pay for waits, uncounted, for the run."""
+    run_id = queue_run(connection, 1)
+    job = claim_job(connection, HOUR)
+    assert job is not None
+
+    with connection.transaction():
+        return_job(connection, job, "the ceiling was reached")
+        connection.execute(
+            "UPDATE runs SET status = 'stopped', stop_reason = 'ceiling' WHERE id = %s",
+            (run_id,),
+        )
+
+    assert job_row(connection, job) == ("queued", 0, None)
+    assert claim_job(connection, HOUR) is None
+    connection.execute(
+        "UPDATE runs SET status = 'running', stop_reason = NULL WHERE id = %s",
+        (run_id,),
+    )
+    again = claim_job(connection, HOUR)
+    assert again is not None
+    assert (again.id, again.attempt) == (job.id, 1)
+    assert events_of(connection, again)[2] == (
+        "queued_again",
+        1,
+        "the ceiling was reached",
+    )
 
 
 def test_every_change_of_state_has_its_audit_row(
