@@ -22,6 +22,7 @@ class RunRow:
     contract_list: str
     cost_ceiling_usd: Decimal
     status: str
+    stop_reason: str | None
     started_at: datetime
     finished_at: datetime | None
 
@@ -100,7 +101,8 @@ def read_run(connection: psycopg.Connection[TupleRow], run_id: UUID) -> RunRow |
     """Reads a run's row, or None when there is no such run."""
     row = connection.execute(
         "SELECT id, config_name, config, git_commit, contract_list,"
-        " cost_ceiling_usd, status, started_at, finished_at FROM runs WHERE id = %s",
+        " cost_ceiling_usd, status, stop_reason, started_at, finished_at"
+        " FROM runs WHERE id = %s",
         (run_id,),
     ).fetchone()
     if row is None:
