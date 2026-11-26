@@ -50,13 +50,17 @@ def add_jobs(
     )
 
 
-def claim_job(connection: psycopg.Connection[TupleRow], lease: timedelta) -> Job | None:
+def claim_job(
+    connection: psycopg.Connection[TupleRow], lease: timedelta, code_sha256: str
+) -> Job | None:
     """Takes the oldest job that is ready, or returns None when there is none.
 
     Args:
         connection: The worker's connection.
         lease: How long the job stays held unless the worker extends it. Past
             it, the job is given up as abandoned.
+        code_sha256: The hash of the worker's code. Only jobs of runs made from
+            the same code are taken.
     """
     with connection.transaction():
         # A row another worker is taking right now is skipped, not waited for.
@@ -64,8 +68,10 @@ def claim_job(connection: psycopg.Connection[TupleRow], lease: timedelta) -> Job
         row = connection.execute(
             "SELECT id, run_id, document_id, attempt FROM jobs"
             " WHERE state = 'queued' AND available_at <= now()"
-            " AND run_id IN (SELECT id FROM runs WHERE status = 'running')"
-            " ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED"
+            " AND run_id IN (SELECT id FROM runs"
+            " WHERE status = 'running' AND code_sha256 = %s)"
+            " ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED",
+            (code_sha256,),
         ).fetchone()
         if row is None:
             return None

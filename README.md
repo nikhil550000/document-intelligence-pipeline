@@ -67,7 +67,7 @@ This queues one job for each contract of a list (`smoke`, `dev` or `test`, from 
 uv run docintel resume <run id> --ceiling-usd 1.00
 ```
 
-An answer is kept under the hash of the exact request that got it, so running the same configuration again makes no calls and costs nothing. The run records the git commit, so the working tree must have no changes to tracked files, and the workers should be built from the same commit (`--build` above). When every contract has ended, the command reports the run as below.
+An answer is kept under the hash of the exact request that got it, so running the same configuration again makes no calls and costs nothing. The run records the git commit, so the working tree must have no changes to tracked files. It also records a hash of the code, and a worker takes only the jobs of runs whose code is its own, so what a run records is what did the work. A run that nothing takes usually means the workers were built from older code: start them again with `--build`. Both the run and the workers print the first 12 characters of their code's hash. When every contract has ended, the command reports the run as below.
 
 ### Report a run
 

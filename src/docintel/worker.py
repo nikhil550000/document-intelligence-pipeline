@@ -58,6 +58,7 @@ def run_worker(
     s3_client: "S3Client",
     bucket: str,
     sdk_for: Callable[[str], openai.OpenAI],
+    code_sha256: str,
     stop: threading.Event,
     on_job: Callable[[Job, str], None] = lambda job, outcome: None,
 ) -> None:
@@ -72,13 +73,15 @@ def run_worker(
         s3_client: The object store.
         bucket: The bucket the texts and responses are in.
         sdk_for: Gives the model SDK for a provider's address.
+        code_sha256: The hash of this worker's code; it takes only jobs of
+            runs made from the same code.
         stop: Set to make the worker exit after the job it holds.
         on_job: Told each job and how it ended.
     """
     runs: dict[UUID, RunHeld] = {}
     while not stop.is_set():
         give_up_abandoned(connection)
-        job = claim_job(connection, LEASE)
+        job = claim_job(connection, LEASE, code_sha256)
         if job is None:
             stop.wait(IDLE_SECONDS)
             continue
