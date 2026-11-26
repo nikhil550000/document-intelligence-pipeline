@@ -58,6 +58,7 @@ def test_the_first_run_applies_every_file_and_a_second_run_applies_none(
         "0001_first_tables.sql",
         "0002_parsed_texts.sql",
         "0003_runs_and_failures.sql",
+        "0004_jobs.sql",
     ]
     assert second_run == []
     assert table_names(database_url) >= FIRST_TABLES
