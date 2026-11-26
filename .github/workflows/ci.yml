@@ -48,9 +48,10 @@ jobs:
       # Checks the MD5 again, so a damaged cache is caught, not trusted.
       - run: uv run docintel data download
 
-      # The same Postgres and object store as on a developer's machine.
+      # The same Postgres and object store as on a developer's machine. The
+      # tests run their own workers, so the worker service is not started.
       - run: cp .env.example .env
-      - run: docker compose up --detach --wait
+      - run: docker compose up --detach --wait postgres objectstore
 
       # A skipped test would pass without checking anything, so any skip fails.
       - run: |

@@ -1,0 +1,9 @@
+# Only what the image needs, so the dataset, keys and local files never reach it.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+!configs/prices.toml
+**/__pycache__

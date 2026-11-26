@@ -17,7 +17,7 @@ from docintel.storage.objects import make_s3_client
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
 
-START_SERVICES = "Start them with: docker compose up -d --wait"
+START_SERVICES = "Start them with: docker compose up -d --wait postgres objectstore"
 
 
 @pytest.fixture(scope="session")
