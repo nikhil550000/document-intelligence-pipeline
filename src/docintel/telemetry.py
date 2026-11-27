@@ -1,10 +1,14 @@
-"""Tracing: where a worker's spans are sent, and the prices the tracing tool uses."""
+"""Tracing and logs: where a worker's spans go, its prices, and its log lines."""
 
 import json
+import logging
 import re
+import sys
 import urllib.request
+from datetime import UTC, datetime
 from typing import Any
 
+from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -33,6 +37,10 @@ mutation ($input: UpdateModelMutationInput!) {
   updateModel(input: $input) { model { id } }
 }
 """
+
+
+# Given by the worker for each attempt at a job, so a line can be joined to its job.
+JOB_FIELDS = ("run_id", "job_id", "attempt", "document_id")
 
 
 class PhoenixError(Exception):
@@ -143,3 +151,42 @@ def ask_phoenix(
         raise PhoenixError(reply["errors"][0]["message"])
     data: dict[str, Any] = reply["data"]
     return data
+
+
+class JsonFormatter(logging.Formatter):
+    """Writes a log record as one JSON object, with its job's ids and trace id."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Returns the record as one line of JSON."""
+        written_at = datetime.fromtimestamp(record.created, UTC)
+        line: dict[str, Any] = {
+            "time": written_at.isoformat(timespec="milliseconds"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        for field in JOB_FIELDS:
+            if hasattr(record, field):
+                line[field] = getattr(record, field)
+        # The handler formats in the thread that logged, so this is that
+        # thread's span, and the id is the one Phoenix shows for its trace.
+        span_context = trace.get_current_span().get_span_context()
+        if span_context.is_valid:
+            line["trace_id"] = trace.format_trace_id(span_context.trace_id)
+        if record.exc_info:
+            line["exception"] = self.formatException(record.exc_info)
+        return json.dumps(line)
+
+
+def log_as_json() -> None:
+    """Writes every log line to the standard output as JSON.
+
+    Our own lines from INFO up; the libraries' only from WARNING up, as some
+    log every request they make.
+    """
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter())
+    root = logging.getLogger()
+    root.addHandler(handler)
+    root.setLevel(logging.WARNING)
+    logging.getLogger("docintel").setLevel(logging.INFO)

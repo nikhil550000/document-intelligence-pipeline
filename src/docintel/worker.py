@@ -1,5 +1,6 @@
 """A worker: takes contracts from the job queue one at a time, until told to stop."""
 
+import logging
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -44,6 +45,14 @@ HEARTBEAT_SECONDS = 30.0
 IDLE_SECONDS = 2.0
 
 tracer = trace.get_tracer(__name__)
+logger = logging.getLogger(__name__)
+# Lines that someone should look at: a job going round again, or given up on.
+LEVELS = {
+    "queued_again": logging.WARNING,
+    "stopped": logging.WARNING,
+    "lost": logging.WARNING,
+    "failed": logging.ERROR,
+}
 
 
 @dataclass(frozen=True)
@@ -113,6 +122,19 @@ def run_worker(
                 outcome = "lost"
                 span.set_status(Status(StatusCode.ERROR, "another worker took it"))
             span.set_attribute("docintel.outcome", outcome)
+            # Inside the span, so the line carries its trace id. No reason is
+            # written: a provider's refusal can quote the contract.
+            logger.log(
+                LEVELS.get(outcome, logging.INFO),
+                "Attempt ended: %s.",
+                outcome,
+                extra={
+                    "run_id": str(job.run_id),
+                    "job_id": str(job.id),
+                    "attempt": job.attempt,
+                    "document_id": str(job.document_id),
+                },
+            )
         on_job(job, outcome)
 
 
