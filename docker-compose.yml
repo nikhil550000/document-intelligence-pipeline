@@ -43,7 +43,7 @@ services:
       PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB}
-      PHOENIX_DATABASE_PASSWORD: ${PHOENIX_DATABASE_PASSWORD}
+      PHOENIX_DATABASE_PASSWORD: ${PHOENIX_DATABASE_PASSWORD:?set it in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,13 +64,13 @@ services:
       PHOENIX_POSTGRES_HOST: postgres
       PHOENIX_POSTGRES_PORT: 5432
       PHOENIX_POSTGRES_USER: phoenix
-      PHOENIX_POSTGRES_PASSWORD: ${PHOENIX_DATABASE_PASSWORD}
+      PHOENIX_POSTGRES_PASSWORD: ${PHOENIX_DATABASE_PASSWORD:?set it in .env}
       PHOENIX_POSTGRES_DB: phoenix
       # Traces can hold contract text, so seeing them needs a sign-in, and
       # sending them a key.
       PHOENIX_ENABLE_AUTH: "true"
-      PHOENIX_SECRET: ${PHOENIX_SECRET}
-      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${PHOENIX_ADMIN_PASSWORD}
+      PHOENIX_SECRET: ${PHOENIX_SECRET:?set it in .env}
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${PHOENIX_ADMIN_PASSWORD:?set it in .env}
       # No usage data about the traces leaves the machine.
       PHOENIX_TELEMETRY_ENABLED: "false"
     # The interface and the address that takes traces over HTTP.
