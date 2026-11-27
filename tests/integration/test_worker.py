@@ -14,6 +14,14 @@ import httpx2
 import openai
 import psycopg
 import pytest
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+from opentelemetry.trace import StatusCode
 
 from docintel import worker
 from docintel.extraction.budget import cost_bound
@@ -120,17 +128,22 @@ def store(
 
 
 def queue_run(
-    connection: psycopg.Connection, document_ids: list[UUID], ceiling: Decimal
+    connection: psycopg.Connection,
+    document_ids: list[UUID],
+    ceiling: Decimal,
+    config: dict[str, Any] = FAST_CONFIG,
+    trace_contract_text: bool = False,
 ) -> UUID:
-    """Writes a run of the fast configuration with one job per document."""
+    """Writes a run, of the fast configuration unless told, with a job per document."""
     run_id = add_run(
         connection,
         "pdfium-deepseek-flash",
-        FAST_CONFIG,
+        config,
         "0" * 40,
         CODE,
         "smoke",
         ceiling,
+        trace_contract_text,
     )
     add_jobs(connection, run_id, document_ids)
     return run_id
@@ -505,3 +518,276 @@ def test_the_heartbeat_keeps_a_slow_contract_from_a_second_worker(
         "SELECT event, attempt FROM audit_events ORDER BY id"
     ).fetchall()
     assert events == [("queued", 0), ("started", 1), ("succeeded", 1)]
+
+
+@pytest.fixture(scope="session")
+def span_store() -> InMemorySpanExporter:
+    """Keeps the spans of every worker of the session.
+
+    A process can set its tracer provider only once, so every test shares it.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    # Sent as each span ends, in the worker's own thread, so an export that
+    # failed into the worker would show up in the job.
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    return exporter
+
+
+@pytest.fixture
+def spans(span_store: InMemorySpanExporter) -> InMemorySpanExporter:
+    """The spans of this test's workers only."""
+    span_store.clear()
+    return span_store
+
+
+def finished_spans(exporter: InMemorySpanExporter) -> dict[str, list[ReadableSpan]]:
+    """Each finished span, by its name, in the order they started."""
+    by_name: dict[str, list[ReadableSpan]] = {}
+    in_order = sorted(exporter.get_finished_spans(), key=lambda span: span.start_time)
+    for span in in_order:
+        by_name.setdefault(span.name, []).append(span)
+    return by_name
+
+
+def texts_in(by_name: dict[str, list[ReadableSpan]]) -> list[str]:
+    """Every piece of text the spans carry: attributes, statuses and events."""
+    texts = []
+    for spans_of_name in by_name.values():
+        for span in spans_of_name:
+            values = list((span.attributes or {}).values())
+            for event in span.events:
+                values.extend((event.attributes or {}).values())
+            for value in values:
+                if isinstance(value, tuple):
+                    texts.extend(str(item) for item in value)
+                else:
+                    texts.append(str(value))
+            texts.append(span.status.description or "")
+    return texts
+
+
+def parent_of(span: ReadableSpan) -> int | None:
+    """The id of the span's parent, or None for a trace's first span."""
+    if span.parent is None:
+        return None
+    return span.parent.span_id
+
+
+def test_a_contract_leaves_one_trace_with_a_span_for_each_step(
+    connection: psycopg.Connection,
+    database_url: str,
+    s3_client: "S3Client",
+    bucket: str,
+    empty_record: dict[str, Any],
+    pdf_of_pages: Callable[[list[str]], bytes],
+    spans: InMemorySpanExporter,
+) -> None:
+    """The steps hang from the contract, the call from the extraction; no text."""
+    empty_record["non_compete"] = {"evidence": [{"text": "Alpha"}], "present": True}
+    (document,) = store(connection, s3_client, bucket, pdf_of_pages, ["Alpha"])
+    provider = FakeProvider(lambda request: response(json.dumps(empty_record)))
+    run_id = queue_run(connection, [document], Decimal(1))
+
+    work_until_run_ends(connection, database_url, s3_client, bucket, run_id, provider)
+
+    by_name = finished_spans(spans)
+    assert sorted(by_name) == [
+        "check structure",
+        "contract",
+        "extract",
+        "model call",
+        "read text",
+        "store",
+    ]
+    for spans_of_name in by_name.values():
+        assert len(spans_of_name) == 1
+    (contract,) = by_name["contract"]
+    (extract,) = by_name["extract"]
+    assert parent_of(contract) is None
+    for name in ["read text", "extract", "check structure", "store"]:
+        assert parent_of(by_name[name][0]) == contract.context.span_id
+    assert parent_of(by_name["model call"][0]) == extract.context.span_id
+    trace_ids = set()
+    for spans_of_name in by_name.values():
+        trace_ids.add(spans_of_name[0].context.trace_id)
+    assert len(trace_ids) == 1
+
+    job = connection.execute("SELECT id FROM jobs").fetchone()
+    assert job is not None
+    assert contract.attributes == {
+        "openinference.span.kind": "CHAIN",
+        "docintel.run_id": str(run_id),
+        "docintel.job_id": str(job[0]),
+        "docintel.attempt": 1,
+        "docintel.document_id": str(document),
+        "docintel.outcome": "valid",
+    }
+    cost = float(call_cost(PRICES, 3000, 0, 900))
+    assert extract.attributes is not None
+    assert extract.attributes["llm.token_count.prompt"] == 3000
+    assert extract.attributes["llm.token_count.completion"] == 900
+    assert extract.attributes["llm.token_count.total"] == 3900
+    assert extract.attributes["llm.cost.total"] == cost
+    assert extract.attributes["docintel.cost.paid_usd"] == cost
+    assert extract.attributes["docintel.from_cache"] is False
+    for text in texts_in(by_name):
+        assert "Alpha" not in text
+
+
+def test_a_run_that_asks_for_it_sends_the_request_and_the_answer(
+    connection: psycopg.Connection,
+    database_url: str,
+    s3_client: "S3Client",
+    bucket: str,
+    empty_record: dict[str, Any],
+    pdf_of_pages: Callable[[list[str]], bytes],
+    spans: InMemorySpanExporter,
+) -> None:
+    """The extraction carries the contract's text in the request, and the answer."""
+    documents = store(connection, s3_client, bucket, pdf_of_pages, ["Alpha"])
+    answer = json.dumps(empty_record)
+    provider = FakeProvider(lambda request: response(answer))
+    run_id = queue_run(connection, documents, Decimal(1), trace_contract_text=True)
+
+    work_until_run_ends(connection, database_url, s3_client, bucket, run_id, provider)
+
+    (extract,) = finished_spans(spans)["extract"]
+    assert extract.attributes is not None
+    assert "Alpha" in str(extract.attributes["input.value"])
+    assert extract.attributes["output.value"] == answer
+
+
+def test_each_attempt_at_the_model_has_its_own_span(
+    connection: psycopg.Connection,
+    database_url: str,
+    s3_client: "S3Client",
+    bucket: str,
+    empty_record: dict[str, Any],
+    pdf_of_pages: Callable[[list[str]], bytes],
+    spans: InMemorySpanExporter,
+) -> None:
+    """Two server errors, then an answer: three spans, the failures marked."""
+    documents = store(connection, s3_client, bucket, pdf_of_pages, ["Alpha"])
+    answers = [
+        httpx2.Response(503, json={"error": {"message": "busy"}}),
+        httpx2.Response(503, json={"error": {"message": "busy"}}),
+        response(json.dumps(empty_record)),
+    ]
+    provider = FakeProvider(lambda request: answers.pop(0))
+    three_attempts = {
+        **CONFIG_AS_READ,
+        "retries": {"timeout_seconds": 300, "max_attempts": 3, "first_wait_seconds": 0},
+    }
+    run_id = queue_run(connection, documents, Decimal(1), config=three_attempts)
+
+    work_until_run_ends(connection, database_url, s3_client, bucket, run_id, provider)
+
+    calls = finished_spans(spans)["model call"]
+    outcomes = []
+    statuses = []
+    for call in calls:
+        assert call.attributes is not None
+        outcomes.append(call.attributes["docintel.outcome"])
+        statuses.append(call.status.status_code)
+    assert outcomes == ["error 503", "error 503", "answered"]
+    assert statuses == [StatusCode.ERROR, StatusCode.ERROR, StatusCode.UNSET]
+    first = calls[0].attributes
+    assert first is not None
+    # The provider may have done the work, so the attempt stays counted.
+    assert first["docintel.cost.settled_usd"] == first["docintel.cost.reserved_usd"]
+
+
+def test_an_answer_from_the_cache_shows_its_price_and_that_nothing_was_paid(
+    connection: psycopg.Connection,
+    database_url: str,
+    s3_client: "S3Client",
+    bucket: str,
+    empty_record: dict[str, Any],
+    pdf_of_pages: Callable[[list[str]], bytes],
+    spans: InMemorySpanExporter,
+) -> None:
+    """The replay's extraction has the answer's list price, no call, and $0 paid."""
+    documents = store(connection, s3_client, bucket, pdf_of_pages, ["Alpha"])
+    first = FakeProvider(lambda request: response(json.dumps(empty_record)))
+    first_run = queue_run(connection, documents, Decimal(1))
+    work_until_run_ends(connection, database_url, s3_client, bucket, first_run, first)
+    spans.clear()
+
+    replay = FakeProvider(lambda request: response("never asked"))
+    run_id = queue_run(connection, documents, Decimal(0))
+    work_until_run_ends(connection, database_url, s3_client, bucket, run_id, replay)
+
+    by_name = finished_spans(spans)
+    assert "model call" not in by_name
+    (extract,) = by_name["extract"]
+    assert extract.attributes is not None
+    assert extract.attributes["docintel.from_cache"] is True
+    assert extract.attributes["llm.cost.total"] == float(
+        call_cost(PRICES, 3000, 0, 900)
+    )
+    assert extract.attributes["docintel.cost.paid_usd"] == 0
+
+
+def test_each_failed_attempt_at_a_job_is_a_trace_marked_with_its_reason(
+    connection: psycopg.Connection,
+    database_url: str,
+    s3_client: "S3Client",
+    bucket: str,
+    pdf_of_pages: Callable[[list[str]], bytes],
+    spans: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three attempts, three traces of the same job, each an error with the reason."""
+    monkeypatch.setattr(jobs, "WAITS_BETWEEN_ATTEMPTS", (timedelta(0), timedelta(0)))
+    documents = store(connection, s3_client, bucket, pdf_of_pages, ["Alpha"])
+    provider = FakeProvider(
+        lambda request: httpx2.Response(503, json={"error": {"message": "busy"}})
+    )
+    run_id = queue_run(connection, documents, Decimal(1))
+
+    work_until_run_ends(connection, database_url, s3_client, bucket, run_id, provider)
+
+    contracts = finished_spans(spans)["contract"]
+    trace_ids = set()
+    job_ids = set()
+    attempts = []
+    for contract in contracts:
+        assert contract.attributes is not None
+        trace_ids.add(contract.context.trace_id)
+        job_ids.add(contract.attributes["docintel.job_id"])
+        attempts.append(contract.attributes["docintel.attempt"])
+        assert contract.status.status_code == StatusCode.ERROR
+        assert contract.status.description == "error 503 on the last of 2 attempts"
+    assert attempts == [1, 2, 3]
+    assert len(trace_ids) == 3
+    assert len(job_ids) == 1
+
+
+def test_a_tracing_endpoint_that_refuses_everything_leaves_the_job_done(
+    connection: psycopg.Connection,
+    database_url: str,
+    s3_client: "S3Client",
+    bucket: str,
+    empty_record: dict[str, Any],
+    pdf_of_pages: Callable[[list[str]], bytes],
+    spans: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every span goes to an address where nothing listens; the contract is stored."""
+    nobody_listening = OTLPSpanExporter(
+        endpoint="http://127.0.0.1:9/v1/traces", timeout=1
+    )
+    monkeypatch.setattr(spans, "export", nobody_listening.export)
+    documents = store(connection, s3_client, bucket, pdf_of_pages, ["Alpha"])
+    provider = FakeProvider(lambda request: response(json.dumps(empty_record)))
+    run_id = queue_run(connection, documents, Decimal(1))
+
+    (outcomes,) = work_until_run_ends(
+        connection, database_url, s3_client, bucket, run_id, provider
+    )
+
+    assert outcomes == ["valid"]
+    assert run_status(connection, run_id) == "complete"
+    assert spans.get_finished_spans() == ()

@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     s3_access_key_id: str
     s3_secret_access_key: SecretStr
     s3_bucket: str
+    # Where workers send their spans: the full address, ending in /v1/traces.
+    traces_endpoint: str = "http://localhost:6006/v1/traces"
+    # A system key made in the tracing tool. Only the worker needs it.
+    phoenix_api_key: SecretStr | None = None
     # Under the name the provider's own documentation uses. Only the commands
     # that call a model need it.
     fireworks_api_key: SecretStr | None = Field(

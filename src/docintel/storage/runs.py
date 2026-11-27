@@ -99,12 +99,13 @@ def add_run(
     code_sha256: str,
     contract_list: str,
     cost_ceiling_usd: Decimal,
+    trace_contract_text: bool,
 ) -> UUID:
     """Writes the row of a run that is starting, and returns its id."""
     row = connection.execute(
         "INSERT INTO runs (config_name, config, git_commit, code_sha256,"
-        " contract_list, cost_ceiling_usd) VALUES (%s, %s, %s, %s, %s, %s)"
-        " RETURNING id",
+        " contract_list, cost_ceiling_usd, trace_contract_text)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
         (
             config_name,
             Jsonb(config),
@@ -112,6 +113,7 @@ def add_run(
             code_sha256,
             contract_list,
             cost_ceiling_usd,
+            trace_contract_text,
         ),
     ).fetchone()
     # INSERT ... RETURNING gives one row.

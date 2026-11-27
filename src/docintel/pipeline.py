@@ -6,15 +6,22 @@ import time
 import tomllib
 from dataclasses import dataclass
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import psycopg
+from opentelemetry import trace
 from psycopg.rows import TupleRow
 
 from docintel.domain.record import SCHEMA_VERSION
 from docintel.extraction.budget import Budget
-from docintel.extraction.client import ModelClient, RetrySettings, read_completion
+from docintel.extraction.client import (
+    Completion,
+    ModelClient,
+    RetrySettings,
+    read_completion,
+)
 from docintel.extraction.prices import call_cost
 from docintel.extraction.request import ModelSettings, build_request, request_sha256
 from docintel.parsing.parsed_text import ParsedText
@@ -27,6 +34,7 @@ from docintel.validation.structure import check_structure
 if TYPE_CHECKING:
     from mypy_boto3_s3 import S3Client
 
+tracer = trace.get_tracer(__name__)
 
 PACKAGE_FOLDER = Path(__file__).parent
 
@@ -159,6 +167,7 @@ def extract_contract(
     stored: StoredText,
     client: ModelClient,
     budget: Budget,
+    trace_contract_text: bool,
 ) -> Extraction:
     """Asks the model for one contract's record, and returns what to store.
 
@@ -171,29 +180,59 @@ def extract_contract(
         ModelCallError: Every attempt at the model failed.
     """
     start = time.perf_counter()
-    pages = tuple(json.loads(get_object(s3_client, bucket, stored.text_sha256)))
-    request = build_request(config.model, config.prompt_version, pages)
-    request_key = request_sha256(request)
+    with tracer.start_as_current_span("read text") as span:
+        pages = tuple(json.loads(get_object(s3_client, bucket, stored.text_sha256)))
+        span.set_attribute("docintel.parser", config.parser)
+        span.set_attribute("docintel.text.pages", len(pages))
+        span.set_attribute("docintel.text.characters", sum(map(len, pages)))
+        span.set_attribute("docintel.parse_seconds", stored.parse_seconds)
 
-    response_sha256 = find_cached_response(connection, request_key)
-    from_cache = response_sha256 is not None
-    if response_sha256 is not None:
-        response = get_object(s3_client, bucket, response_sha256)
-    else:
-        response = client.complete(request, budget)
-        response_sha256 = put_object(s3_client, bucket, response)
+    with tracer.start_as_current_span("extract") as span:
+        spent_before = budget.spent_usd
+        request = build_request(config.model, config.prompt_version, pages)
+        request_key = request_sha256(request)
+        response_sha256 = find_cached_response(connection, request_key)
+        from_cache = response_sha256 is not None
+        if response_sha256 is not None:
+            response = get_object(s3_client, bucket, response_sha256)
+        else:
+            response = client.complete(request, budget)
+            response_sha256 = put_object(s3_client, bucket, response)
+        completion = read_completion(response)
+        # The list price of the answer, also when it came from the cache, so
+        # that configurations compare on what their answers cost.
+        cost = call_cost(
+            budget.prices,
+            completion.input_tokens,
+            completion.cached_input_tokens,
+            completion.output_tokens,
+        )
+        describe_extraction(span, config, completion, from_cache, cost)
+        span.set_attribute(
+            "docintel.cost.paid_usd", float(budget.spent_usd - spent_before)
+        )
+        if trace_contract_text:
+            span.set_attribute("input.value", json.dumps(request))
+            span.set_attribute("input.mime_type", "application/json")
+            span.set_attribute("output.value", completion.content)
+            span.set_attribute("output.mime_type", "application/json")
     extract_seconds = time.perf_counter() - start
 
-    completion = read_completion(response)
-    result = check_structure(completion.content, completion.cut_off)
-    record = None
-    problems = []
-    status = "valid"
-    if isinstance(result, list):
-        problems = result
-        status = "needs_review"
-    else:
-        record = result
+    with tracer.start_as_current_span("check structure") as span:
+        result = check_structure(completion.content, completion.cut_off)
+        record = None
+        problems = []
+        status = "valid"
+        if isinstance(result, list):
+            problems = result
+            status = "needs_review"
+        else:
+            record = result
+        span.set_attribute("docintel.status", status)
+        problem_names = []
+        for problem in problems:
+            problem_names.append(f"{problem.field}: {problem.rule}")
+        span.set_attribute("docintel.problems", problem_names)
     return Extraction(
         document_id=stored.document_id,
         status=status,
@@ -209,15 +248,31 @@ def extract_contract(
         input_tokens=completion.input_tokens,
         cached_input_tokens=completion.cached_input_tokens,
         output_tokens=completion.output_tokens,
-        # The list price of the answer, also when it came from the cache, so
-        # that configurations compare on what their answers cost.
-        cost_usd=call_cost(
-            budget.prices,
-            completion.input_tokens,
-            completion.cached_input_tokens,
-            completion.output_tokens,
-        ),
+        cost_usd=cost,
         parse_seconds=stored.parse_seconds,
         extract_seconds=extract_seconds,
         total_seconds=stored.parse_seconds + time.perf_counter() - start,
     )
+
+
+def describe_extraction(
+    span: trace.Span,
+    config: RunConfig,
+    completion: Completion,
+    from_cache: bool,
+    cost_usd: Decimal,
+) -> None:
+    """Writes the model's answer on the span under the names Phoenix reads."""
+    span.set_attribute("openinference.span.kind", "LLM")
+    span.set_attribute("llm.model_name", config.model.model)
+    span.set_attribute("llm.token_count.prompt", completion.input_tokens)
+    span.set_attribute(
+        "llm.token_count.prompt_details.cache_read", completion.cached_input_tokens
+    )
+    span.set_attribute("llm.token_count.completion", completion.output_tokens)
+    span.set_attribute(
+        "llm.token_count.total", completion.input_tokens + completion.output_tokens
+    )
+    span.set_attribute("llm.cost.total", float(cost_usd))
+    span.set_attribute("docintel.prompt_version", config.prompt_version)
+    span.set_attribute("docintel.from_cache", from_cache)

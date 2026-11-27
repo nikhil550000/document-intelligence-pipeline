@@ -8,10 +8,14 @@ from typing import Any
 
 import openai
 from openai.types.chat import ChatCompletion
+from opentelemetry import trace
+from opentelemetry.trace import Span, Status, StatusCode
 
 from docintel.config import Settings
 from docintel.extraction.budget import Budget
 from docintel.extraction.prices import call_cost
+
+tracer = trace.get_tracer(__name__)
 
 
 class ModelCallError(Exception):
@@ -109,41 +113,57 @@ class ModelClient:
         while True:
             reserved = budget.reserve(request)
             self.calls += 1
-            try:
-                raw = self.sdk.chat.completions.with_raw_response.create(
-                    **request, timeout=self.retry.timeout_seconds
-                )
-            except (
-                openai.APIConnectionError,
-                openai.RateLimitError,
-                openai.InternalServerError,
-            ) as error:
-                # A refusal for the rate is not charged. After a time-out or a
-                # server error the provider may have done the work, and billed it.
-                if isinstance(error, openai.RateLimitError):
+            with tracer.start_as_current_span("model call") as span:
+                span.set_attribute("docintel.attempt", attempt)
+                span.set_attribute("docintel.cost.reserved_usd", float(reserved))
+                try:
+                    raw = self.sdk.chat.completions.with_raw_response.create(
+                        **request, timeout=self.retry.timeout_seconds
+                    )
+                except (
+                    openai.APIConnectionError,
+                    openai.RateLimitError,
+                    openai.InternalServerError,
+                ) as error:
+                    # A refusal for the rate is not charged. After a time-out or a
+                    # server error the provider may have done the work, and billed it.
+                    settled = reserved
+                    if isinstance(error, openai.RateLimitError):
+                        settled = Decimal(0)
+                        budget.settle(reserved, settled)
+                    mark_failed_call(span, describe(error), settled)
+                    if attempt == self.retry.max_attempts:
+                        raise ModelCallError(
+                            f"{describe(error)} on the last of {attempt} attempts"
+                        ) from error
+                except openai.APIStatusError as error:
                     budget.settle(reserved, Decimal(0))
-                if attempt == self.retry.max_attempts:
-                    raise ModelCallError(
-                        f"{describe(error)} on the last of {attempt} attempts"
-                    ) from error
-            except openai.APIStatusError as error:
-                budget.settle(reserved, Decimal(0))
-                # Sent again, it would be refused the same way.
-                raise ModelCallError(f"refused: {error}") from error
-            else:
-                response = raw.http_response.content
-                completion = read_completion(response)
-                cost = call_cost(
-                    budget.prices,
-                    completion.input_tokens,
-                    completion.cached_input_tokens,
-                    completion.output_tokens,
-                )
-                budget.settle(reserved, cost)
-                return response
+                    mark_failed_call(span, describe(error), Decimal(0))
+                    # Sent again, it would be refused the same way.
+                    raise ModelCallError(f"refused: {error}") from error
+                else:
+                    response = raw.http_response.content
+                    completion = read_completion(response)
+                    cost = call_cost(
+                        budget.prices,
+                        completion.input_tokens,
+                        completion.cached_input_tokens,
+                        completion.output_tokens,
+                    )
+                    budget.settle(reserved, cost)
+                    span.set_attribute("docintel.outcome", "answered")
+                    span.set_attribute("docintel.cost.settled_usd", float(cost))
+                    return response
             self.sleep(wait)
             wait = wait * 2
             attempt += 1
+
+
+def mark_failed_call(span: Span, outcome: str, settled_usd: Decimal) -> None:
+    """Marks an attempt that got no answer, with what it stays counted at."""
+    span.set_attribute("docintel.outcome", outcome)
+    span.set_attribute("docintel.cost.settled_usd", float(settled_usd))
+    span.set_status(Status(StatusCode.ERROR, outcome))
 
 
 def describe(error: openai.APIError) -> str:

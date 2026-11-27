@@ -10,6 +10,8 @@ from uuid import UUID
 
 import openai
 import psycopg
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 from psycopg.rows import TupleRow
 
 from docintel.extraction.budget import Budget, CeilingReachedError
@@ -40,6 +42,8 @@ LEASE = timedelta(minutes=2)
 HEARTBEAT_SECONDS = 30.0
 # How long a worker with nothing to do waits before it looks at the queue again.
 IDLE_SECONDS = 2.0
+
+tracer = trace.get_tracer(__name__)
 
 
 @dataclass(frozen=True)
@@ -85,14 +89,30 @@ def run_worker(
         if job is None:
             stop.wait(IDLE_SECONDS)
             continue
-        try:
-            outcome = work_on(
-                connection, heartbeat_connection, s3_client, bucket, sdk_for, runs, job
-            )
-        except JobLostError:
-            # Its time ran out and another worker took it, so that worker's
-            # answer is the one kept.
-            outcome = "lost"
+        # One trace for each attempt at a job, as a job's attempts may be made
+        # by different workers.
+        with tracer.start_as_current_span("contract") as span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("docintel.run_id", str(job.run_id))
+            span.set_attribute("docintel.job_id", str(job.id))
+            span.set_attribute("docintel.attempt", job.attempt)
+            span.set_attribute("docintel.document_id", str(job.document_id))
+            try:
+                outcome = work_on(
+                    connection,
+                    heartbeat_connection,
+                    s3_client,
+                    bucket,
+                    sdk_for,
+                    runs,
+                    job,
+                )
+            except JobLostError:
+                # Its time ran out and another worker took it, so that worker's
+                # answer is the one kept.
+                outcome = "lost"
+                span.set_status(Status(StatusCode.ERROR, "another worker took it"))
+            span.set_attribute("docintel.outcome", outcome)
         on_job(job, outcome)
 
 
@@ -143,6 +163,7 @@ def work_on(
                 stored,
                 held.client,
                 held.budget,
+                run.trace_contract_text,
             )
     except ModelCallError as error:
         return fail_attempt(connection, job, str(error))
@@ -154,7 +175,7 @@ def work_on(
         return "stopped"
     # Together, so a contract is never stored without its job ending, or the
     # other way round, and a worker that lost its job stores nothing.
-    with connection.transaction():
+    with tracer.start_as_current_span("store"), connection.transaction():
         mark_succeeded(connection, job)
         add_extraction(connection, job.run_id, extraction)
     return extraction.status
@@ -164,6 +185,7 @@ def fail_attempt(
     connection: psycopg.Connection[TupleRow], job: Job, reason: str
 ) -> str:
     """Ends the attempt without an answer, and says whether the job will run again."""
+    trace.get_current_span().set_status(Status(StatusCode.ERROR, reason))
     mark_failed(connection, job, reason)
     if job.attempt == MAX_ATTEMPTS:
         return "failed"

@@ -37,7 +37,7 @@ def queue_run(connection: psycopg.Connection, file_names: list[str]) -> UUID:
     """Writes a run with one job for a document of each file name."""
     config = {"model": {"name": "a-model"}, "prompt_version": 1}
     run_id = add_run(
-        connection, "a-config", config, "b" * 40, CODE, "smoke", Decimal(1)
+        connection, "a-config", config, "b" * 40, CODE, "smoke", Decimal(1), False
     )
     document_ids = []
     for file_name in file_names:
