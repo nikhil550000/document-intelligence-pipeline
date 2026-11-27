@@ -1,5 +1,6 @@
 """The `docintel` command-line entry point."""
 
+import logging
 import signal
 import subprocess
 import threading
@@ -59,7 +60,7 @@ from docintel.pipeline import (
     read_run_config,
     store_contract,
 )
-from docintel.storage.jobs import Job, add_jobs, read_ended_jobs
+from docintel.storage.jobs import add_jobs, read_ended_jobs
 from docintel.storage.migrations import MIGRATIONS_FOLDER, apply_migrations
 from docintel.storage.objects import make_s3_client
 from docintel.storage.runs import add_run, find_stored_text, resume_run
@@ -71,7 +72,12 @@ from docintel.storage.scores import (
     replace_gold_values,
     replace_scores,
 )
-from docintel.telemetry import PhoenixError, make_tracer_provider, write_prices
+from docintel.telemetry import (
+    PhoenixError,
+    log_as_json,
+    make_tracer_provider,
+    write_prices,
+)
 from docintel.worker import run_worker
 
 DATA_FOLDER = Path("data")
@@ -416,6 +422,8 @@ def worker() -> None:
     settings = Settings()
     provider = make_tracer_provider(settings.phoenix_url, phoenix_api_key(settings))
     trace.set_tracer_provider(provider)
+    log_as_json()
+    logger = logging.getLogger(__name__)
     s3_client = make_s3_client(settings)
     code_sha256 = hash_of_code(PACKAGE_FOLDER)
     stop = threading.Event()
@@ -423,16 +431,13 @@ def worker() -> None:
     signal.signal(signal.SIGINT, lambda number, frame: stop.set())
     signal.signal(signal.SIGTERM, lambda number, frame: stop.set())
 
-    def echo_job(job: Job, outcome: str) -> None:
-        typer.echo(f"{outcome:<13}job {job.id}, attempt {job.attempt}")
-
     database_url = settings.database_url.get_secret_value()
     try:
         with (
             psycopg.connect(database_url, autocommit=True) as connection,
             psycopg.connect(database_url, autocommit=True) as heartbeat_connection,
         ):
-            typer.echo(f"Waiting for jobs of runs made from code {code_sha256[:12]}.")
+            logger.info("Waiting for jobs of runs made from code %s.", code_sha256[:12])
             run_worker(
                 connection,
                 heartbeat_connection,
@@ -441,12 +446,11 @@ def worker() -> None:
                 lambda base_url: make_sdk(settings, base_url),
                 code_sha256,
                 stop,
-                on_job=echo_job,
             )
     finally:
         # Sends the spans still waiting, also those of a worker that crashed.
         provider.shutdown()
-    typer.echo("Stopped.")
+    logger.info("Stopped.")
 
 
 class RunNotReportableError(Exception):

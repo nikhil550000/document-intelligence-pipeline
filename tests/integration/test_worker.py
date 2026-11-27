@@ -1,6 +1,9 @@
 """Tests for workers taking a run's contracts from the queue, with a fake model."""
 
+import io
 import json
+import logging
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -21,9 +24,9 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import StatusCode, format_trace_id
 
-from docintel import worker
+from docintel import telemetry, worker
 from docintel.extraction.budget import cost_bound
 from docintel.extraction.prices import PRICES_PATH, call_cost, read_prices
 from docintel.extraction.request import build_request
@@ -791,3 +794,76 @@ def test_a_tracing_endpoint_that_refuses_everything_leaves_the_job_done(
     assert outcomes == ["valid"]
     assert run_status(connection, run_id) == "complete"
     assert spans.get_finished_spans() == ()
+
+
+@pytest.fixture
+def worker_log(monkeypatch: pytest.MonkeyPatch) -> Iterator[io.StringIO]:
+    """Logs as a worker does, to a standard output of its own that the test reads."""
+    standard_output = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", standard_output)
+    root = logging.getLogger()
+    handlers_before = list(root.handlers)
+    level_before = root.level
+    telemetry.log_as_json()
+    yield standard_output
+    for handler in list(root.handlers):
+        if handler not in handlers_before:
+            root.removeHandler(handler)
+    root.setLevel(level_before)
+    logging.getLogger("docintel").setLevel(logging.NOTSET)
+
+
+def test_each_attempt_at_a_job_logs_a_json_line_that_leads_to_its_trace(
+    connection: psycopg.Connection,
+    database_url: str,
+    s3_client: "S3Client",
+    bucket: str,
+    empty_record: dict[str, Any],
+    pdf_of_pages: Callable[[list[str]], bytes],
+    spans: InMemorySpanExporter,
+    worker_log: io.StringIO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A line for each attempt, with its ids; no text, even when traces carry it."""
+    monkeypatch.setattr(jobs, "WAITS_BETWEEN_ATTEMPTS", (timedelta(0), timedelta(0)))
+    empty_record["non_compete"] = {"evidence": [{"text": "Alpha"}], "present": True}
+    documents = store(connection, s3_client, bucket, pdf_of_pages, ["Alpha", "Bravo"])
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if "Bravo" in request.content.decode():
+            # Some providers quote the request when they refuse it.
+            refusal = {"error": {"message": "cannot read Bravo"}}
+            return httpx2.Response(400, json=refusal)
+        return response(json.dumps(empty_record))
+
+    provider = FakeProvider(answer)
+    run_id = queue_run(connection, documents, Decimal(1), trace_contract_text=True)
+
+    work_until_run_ends(connection, database_url, s3_client, bucket, run_id, provider)
+
+    contracts = {}
+    for span in finished_spans(spans)["contract"]:
+        assert span.attributes is not None
+        job_and_attempt = (
+            span.attributes["docintel.job_id"],
+            span.attributes["docintel.attempt"],
+        )
+        contracts[job_and_attempt] = span
+    endings = []
+    for text in worker_log.getvalue().splitlines():
+        assert "Alpha" not in text
+        assert "Bravo" not in text
+        line = json.loads(text)
+        contract = contracts[(line["job_id"], line["attempt"])]
+        assert contract.attributes is not None
+        assert line["run_id"] == str(run_id)
+        assert line["document_id"] == contract.attributes["docintel.document_id"]
+        assert line["trace_id"] == format_trace_id(contract.context.trace_id)
+        endings.append((line["level"], line["message"]))
+    assert len(endings) == len(contracts) == 4
+    assert sorted(endings) == [
+        ("ERROR", "Attempt ended: failed."),
+        ("INFO", "Attempt ended: valid."),
+        ("WARNING", "Attempt ended: queued_again."),
+        ("WARNING", "Attempt ended: queued_again."),
+    ]

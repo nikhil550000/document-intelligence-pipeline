@@ -1,10 +1,15 @@
-"""Tests for giving Phoenix the price list."""
+"""Tests for giving Phoenix the price list, and for the worker's log lines."""
 
-from datetime import date
+import json
+import logging
+import sys
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import format_trace_id
 
 from docintel import telemetry
 from docintel.extraction.prices import Prices
@@ -94,3 +99,52 @@ def test_a_model_with_our_price_on_a_later_page_is_updated_not_added_again(
     # A dot in a model's name matches only a dot.
     assert fields["namePattern"] == r"^a\.model$"
     assert "modelType" not in fields
+
+
+def log_record(message: str, **fields: Any) -> logging.LogRecord:
+    """A record as `logging.getLogger("docintel.worker").info` would make it."""
+    return logging.makeLogRecord(
+        {
+            "name": "docintel.worker",
+            "levelname": "INFO",
+            "levelno": logging.INFO,
+            "msg": message,
+            **fields,
+        }
+    )
+
+
+def test_a_line_inside_a_span_carries_the_job_and_the_trace_it_belongs_to() -> None:
+    """One JSON object with the time, level, message, the job's ids and the trace."""
+    tracer = TracerProvider().get_tracer("test")
+    job = {"run_id": "r1", "job_id": "j1", "attempt": 2, "document_id": "d1"}
+
+    with tracer.start_as_current_span("contract") as span:
+        line = telemetry.JsonFormatter().format(log_record("Attempt ended.", **job))
+
+    fields = json.loads(line)
+    written_at = datetime.fromisoformat(fields.pop("time"))
+    assert written_at.tzinfo == UTC
+    assert fields == {
+        "level": "INFO",
+        "logger": "docintel.worker",
+        "message": "Attempt ended.",
+        **job,
+        "trace_id": format_trace_id(span.get_span_context().trace_id),
+    }
+
+
+def test_a_line_outside_a_span_has_no_trace_and_its_error_on_one_line() -> None:
+    """An exception is written in the line, so a log reader never sees half of it."""
+    try:
+        raise ValueError("no answer")
+    except ValueError:
+        record = log_record("Could not send.", exc_info=sys.exc_info())
+
+    line = telemetry.JsonFormatter().format(record)
+
+    assert "\n" not in line
+    fields = json.loads(line)
+    assert "trace_id" not in fields
+    assert "run_id" not in fields
+    assert fields["exception"].endswith("ValueError: no answer")
