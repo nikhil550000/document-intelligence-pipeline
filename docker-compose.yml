@@ -87,7 +87,7 @@ services:
       # Inside Compose the services are reached by their names and own ports.
       DOCINTEL_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DOCINTEL_S3_ENDPOINT_URL: http://objectstore:8333
-      DOCINTEL_TRACES_ENDPOINT: http://phoenix:6006/v1/traces
+      DOCINTEL_PHOENIX_URL: http://phoenix:6006
     depends_on:
       postgres:
         condition: service_healthy

@@ -51,9 +51,15 @@ This reads each contract's PDF page by page with [PDFium](https://pdfium.googles
 docker compose up --detach phoenix
 ```
 
-This starts [Arize Phoenix](https://github.com/Arize-ai/phoenix) at http://localhost:6006, which keeps its traces in a database and a role of its own on the same Postgres, so it has no access to the pipeline's tables. Signing in is required: the user is `admin@localhost`, with the password set as `PHOENIX_ADMIN_PASSWORD` in `.env`. In Phoenix's settings, make a system API key and put it in `.env` as `DOCINTEL_PHOENIX_API_KEY`; a worker does not start without one. Phoenix's server is under the Elastic License 2.0, which allows running it yourself, as here, but not offering it to others as a hosted service.
+This starts [Arize Phoenix](https://github.com/Arize-ai/phoenix) at http://localhost:6006, which keeps its traces in a database and a role of its own on the same Postgres, so it has no access to the pipeline's tables. Signing in is required: the user is `admin@localhost`, with the password set as `PHOENIX_ADMIN_PASSWORD` in `.env`. In Phoenix's settings, make a system API key and put it in `.env` as `DOCINTEL_PHOENIX_API_KEY`; a worker does not start without one. Then:
 
-Every attempt at a contract leaves one trace, found in Phoenix's `docintel` project. Its spans: `contract` (the run, the job, the attempt and the document, and how it ended), with `read text`, `extract`, `check structure` and `store` under it, and under `extract` one `model call` for each attempt at the provider. `extract` holds the model, the tokens, the list price of the answer (`llm.cost.total`, the same as in the report) and what this run paid for it (`docintel.cost.paid_usd`, $0 for an answer from the cache). A contract worked on twice, as when its first worker dies, shows as two traces with the same `docintel.job_id`. Spans are sent in the background, and if Phoenix is away they are dropped while the contracts are processed as usual.
+```
+uv run docintel phoenix prices
+```
+
+Phoenix works out the cost of a model's answer from its tokens and a price it holds for that model, and its own price table has none for the models used here. This gives it the prices in `configs/prices.toml`, so Phoenix costs each answer as the report does. Run it again whenever that file changes; it updates the prices it gave before. Phoenix's server is under the Elastic License 2.0, which allows running it yourself, as here, but not offering it to others as a hosted service.
+
+Every attempt at a contract leaves one trace, found in Phoenix's `docintel` project. Its spans: `contract` (the run, the job, the attempt and the document, and how it ended), with `read text`, `extract`, `check structure` and `store` under it, and under `extract` one `model call` for each attempt at the provider. `extract` holds the model, the tokens, the list price of the answer (`llm.cost.total`, the same as in the report, and the cost Phoenix shows) and what this run paid for it (`docintel.cost.paid_usd`, $0 for an answer from the cache). A contract worked on twice, as when its first worker dies, shows as two traces with the same `docintel.job_id`. Spans are sent in the background, and if Phoenix is away they are dropped while the contracts are processed as usual.
 
 ### Start the workers
 
