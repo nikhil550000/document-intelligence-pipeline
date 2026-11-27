@@ -25,6 +25,8 @@ class RunRow:
     stop_reason: str | None
     started_at: datetime
     finished_at: datetime | None
+    # Whether its traces carry the contracts' text and the model's answers.
+    trace_contract_text: bool
 
 
 @dataclass(frozen=True)
@@ -101,8 +103,8 @@ def read_run(connection: psycopg.Connection[TupleRow], run_id: UUID) -> RunRow |
     """Reads a run's row, or None when there is no such run."""
     row = connection.execute(
         "SELECT id, config_name, config, git_commit, contract_list,"
-        " cost_ceiling_usd, status, stop_reason, started_at, finished_at"
-        " FROM runs WHERE id = %s",
+        " cost_ceiling_usd, status, stop_reason, started_at, finished_at,"
+        " trace_contract_text FROM runs WHERE id = %s",
         (run_id,),
     ).fetchone()
     if row is None:

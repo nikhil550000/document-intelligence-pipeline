@@ -21,22 +21,29 @@ class Prices:
     output: Decimal
 
 
+def read_price_list(path: Path) -> dict[str, Prices]:
+    """Returns the prices of every model in the price file, by model."""
+    # Decimal and not float, so that a price of 0.30 stays exactly that.
+    with path.open("rb") as file:
+        prices_by_model = tomllib.load(file, parse_float=Decimal)
+    price_list = {}
+    for model, prices in prices_by_model.items():
+        price_list[model] = Prices(
+            read_on=prices["read_on"],
+            input=prices["input"],
+            cached_input=prices["cached_input"],
+            output=prices["output"],
+        )
+    return price_list
+
+
 def read_prices(path: Path, model: str) -> Prices:
     """Returns the prices of one model from the price file.
 
     Raises:
         KeyError: The file has no prices for the model.
     """
-    # Decimal and not float, so that a price of 0.30 stays exactly that.
-    with path.open("rb") as file:
-        prices_by_model = tomllib.load(file, parse_float=Decimal)
-    prices = prices_by_model[model]
-    return Prices(
-        read_on=prices["read_on"],
-        input=prices["input"],
-        cached_input=prices["cached_input"],
-        output=prices["output"],
-    )
+    return read_price_list(path)[model]
 
 
 def call_cost(

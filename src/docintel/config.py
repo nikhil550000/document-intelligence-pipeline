@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     s3_access_key_id: str
     s3_secret_access_key: SecretStr
     s3_bucket: str
+    # Phoenix, where workers send their spans.
+    phoenix_url: str = "http://localhost:6006"
+    # A system key made in Phoenix. Only the commands that talk to it need it.
+    phoenix_api_key: SecretStr | None = None
     # Under the name the provider's own documentation uses. Only the commands
     # that call a model need it.
     fireworks_api_key: SecretStr | None = Field(

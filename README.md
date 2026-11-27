@@ -45,6 +45,22 @@ uv run docintel data store
 
 This reads each contract's PDF page by page with [PDFium](https://pdfium.googlesource.com/pdfium/) and keeps the PDF and its text in the object store, each under the SHA-256 of its content, with a row for each in Postgres. It lists the pages that give no text: blank pages, and pages that are only a picture, since PDFium reads the text in the PDF and does no OCR. Running it again stores nothing new.
 
+### Start Phoenix, for the traces
+
+```
+docker compose up --detach phoenix
+```
+
+This starts [Arize Phoenix](https://github.com/Arize-ai/phoenix) at http://localhost:6006, which keeps its traces in a database and a role of its own on the same Postgres, so it has no access to the pipeline's tables. Signing in is required: the user is `admin@localhost`, with the password set as `PHOENIX_ADMIN_PASSWORD` in `.env`. In Phoenix's settings, make a system API key and put it in `.env` as `DOCINTEL_PHOENIX_API_KEY`; a worker does not start without one. Then:
+
+```
+uv run docintel phoenix prices
+```
+
+Phoenix works out the cost of a model's answer from its tokens and a price it holds for that model, and its own price table has none for the models used here. This gives it the prices in `configs/prices.toml`, so Phoenix costs each answer as the report does. Run it again whenever that file changes; it updates the prices it gave before. Phoenix's server is under the Elastic License 2.0, which allows running it yourself, as here, but not offering it to others as a hosted service.
+
+Every attempt at a contract leaves one trace, found in Phoenix's `docintel` project. Its spans: `contract` (the run, the job, the attempt and the document, and how it ended), with `read text`, `extract`, `check structure` and `store` under it, and under `extract` one `model call` for each attempt at the provider. `extract` holds the model, the tokens, the list price of the answer (`llm.cost.total`, the same as in the report, and the cost Phoenix shows) and what this run paid for it (`docintel.cost.paid_usd`, $0 for an answer from the cache). A contract worked on twice, as when its first worker dies, shows as two traces with the same `docintel.job_id`. Spans are sent in the background, and if Phoenix is away they are dropped while the contracts are processed as usual.
+
 ### Start the workers
 
 Put a [Fireworks](https://fireworks.ai/) API key in `.env` as `FIREWORKS_API_KEY`, then:
@@ -68,6 +84,8 @@ uv run docintel resume <run id> --ceiling-usd 1.00
 ```
 
 An answer is kept under the hash of the exact request that got it, so running the same configuration again makes no calls and costs nothing. The run records the git commit, so the working tree must have no changes to tracked files. It also records a hash of the code, and a worker takes only the jobs of runs whose code is its own, so what a run records is what did the work. A run that nothing takes usually means the workers were built from older code: start them again with `--build`. Both the run and the workers print the first 12 characters of their code's hash. When every contract has ended, the command reports the run as below.
+
+A run's traces carry no text from the contracts or the answers, only ids, sizes, times, tokens and cost. `--trace-contract-text` adds the request sent to the model, with the contract's text, and the model's answer; the run's row records the choice, so it is known what was sent to the tracing tool. CUAD is public, so this is safe for its runs, not for a client's contracts.
 
 ### Report a run
 

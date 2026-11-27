@@ -12,6 +12,7 @@ from uuid import UUID
 
 import psycopg
 import typer
+from opentelemetry import trace
 
 from docintel.config import Settings
 from docintel.domain.fields import ALL_FIELDS, NON_CLAUSE_FIELDS
@@ -50,7 +51,7 @@ from docintel.evaluation.stored_gold import (
     score_rows,
 )
 from docintel.extraction.client import make_sdk
-from docintel.extraction.prices import PRICES_PATH, read_prices
+from docintel.extraction.prices import PRICES_PATH, read_price_list, read_prices
 from docintel.parsing.pdfium import PARSER_NAME, PARSER_VERSION
 from docintel.pipeline import (
     PACKAGE_FOLDER,
@@ -70,6 +71,7 @@ from docintel.storage.scores import (
     replace_gold_values,
     replace_scores,
 )
+from docintel.telemetry import PhoenixError, make_tracer_provider, write_prices
 from docintel.worker import run_worker
 
 DATA_FOLDER = Path("data")
@@ -81,6 +83,8 @@ data_app = typer.Typer(help="Manage the CUAD dataset.")
 app.add_typer(data_app, name="data")
 database_app = typer.Typer(help="Manage the database.")
 app.add_typer(database_app, name="db")
+phoenix_app = typer.Typer(help="Manage Phoenix, where the traces go.")
+app.add_typer(phoenix_app, name="phoenix")
 
 
 def echo_left_out() -> None:
@@ -233,6 +237,35 @@ def store() -> None:
     )
 
 
+def phoenix_api_key(settings: Settings) -> str:
+    """Returns the key for Phoenix, or ends the command if there is none."""
+    key = ""
+    if settings.phoenix_api_key is not None:
+        key = settings.phoenix_api_key.get_secret_value()
+    if not key:
+        typer.echo(
+            "DOCINTEL_PHOENIX_API_KEY is not set. Make a system key in Phoenix's"
+            " settings and put it in .env."
+        )
+        raise typer.Exit(code=1)
+    return key
+
+
+@phoenix_app.command("prices")
+def phoenix_prices() -> None:
+    """Give Phoenix the price list, so it costs each answer as the report does."""
+    settings = Settings()
+    key = phoenix_api_key(settings)
+    price_list = read_price_list(PRICES_PATH)
+    try:
+        done = write_prices(settings.phoenix_url, key, price_list)
+    except (OSError, PhoenixError) as error:
+        typer.echo(f"Phoenix at {settings.phoenix_url} took no prices: {error}")
+        raise typer.Exit(code=1) from error
+    for line in done:
+        typer.echo(line)
+
+
 @database_app.command("migrate")
 def migrate() -> None:
     """Apply the numbered SQL files that the database has not run yet."""
@@ -273,6 +306,9 @@ def run(
     config_path: Path,
     contracts: str = typer.Option(help="The list to run on: smoke, dev or test."),
     ceiling_usd: str = typer.Option(help="The most the run may spend, in dollars."),
+    trace_contract_text: bool = typer.Option(
+        False, help="Send each contract's text and the model's answer with its trace."
+    ),
 ) -> None:
     """Queue each contract of a list for the workers, and report the run if it ends."""
     settings = Settings()
@@ -306,12 +342,17 @@ def run(
                 code_sha256,
                 contracts,
                 ceiling,
+                trace_contract_text,
             )
             add_jobs(connection, run_id, document_ids)
         typer.echo(
             f"Run {run_id}: {len(document_ids)} {contracts} contracts queued, "
             f"ceiling ${ceiling} for each worker, prices read on {prices.read_on}."
         )
+        if trace_contract_text:
+            typer.echo("Its traces carry each contract's text and the model's answer.")
+        else:
+            typer.echo("Its traces carry no text from the contracts or the answers.")
         typer.echo(
             f"Workers built from this code ({code_sha256[:12]}) take them: "
             "docker compose up --detach --build worker, or docintel worker."
@@ -373,6 +414,8 @@ def follow_run(connection: psycopg.Connection, run_id: UUID) -> bool:
 def worker() -> None:
     """Take contracts from the job queue one at a time, until stopped."""
     settings = Settings()
+    provider = make_tracer_provider(settings.phoenix_url, phoenix_api_key(settings))
+    trace.set_tracer_provider(provider)
     s3_client = make_s3_client(settings)
     code_sha256 = hash_of_code(PACKAGE_FOLDER)
     stop = threading.Event()
@@ -384,21 +427,25 @@ def worker() -> None:
         typer.echo(f"{outcome:<13}job {job.id}, attempt {job.attempt}")
 
     database_url = settings.database_url.get_secret_value()
-    with (
-        psycopg.connect(database_url, autocommit=True) as connection,
-        psycopg.connect(database_url, autocommit=True) as heartbeat_connection,
-    ):
-        typer.echo(f"Waiting for jobs of runs made from code {code_sha256[:12]}.")
-        run_worker(
-            connection,
-            heartbeat_connection,
-            s3_client,
-            settings.s3_bucket,
-            lambda base_url: make_sdk(settings, base_url),
-            code_sha256,
-            stop,
-            on_job=echo_job,
-        )
+    try:
+        with (
+            psycopg.connect(database_url, autocommit=True) as connection,
+            psycopg.connect(database_url, autocommit=True) as heartbeat_connection,
+        ):
+            typer.echo(f"Waiting for jobs of runs made from code {code_sha256[:12]}.")
+            run_worker(
+                connection,
+                heartbeat_connection,
+                s3_client,
+                settings.s3_bucket,
+                lambda base_url: make_sdk(settings, base_url),
+                code_sha256,
+                stop,
+                on_job=echo_job,
+            )
+    finally:
+        # Sends the spans still waiting, also those of a worker that crashed.
+        provider.shutdown()
     typer.echo("Stopped.")
 
 
